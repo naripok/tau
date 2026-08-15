@@ -77,6 +77,7 @@ class ProviderModelMetadata:
     cost_tiers: tuple[ModelCostTier, ...] = ()
     context_window: int | None = None
     max_tokens: int | None = None
+    auto_compact_percent: int | None = None
     headers: dict[str, str] = field(default_factory=dict)
     compat: dict[str, Any] = field(default_factory=dict)
     thinking_level_map: dict[ThinkingLevel, str | None] = field(default_factory=dict)
@@ -103,6 +104,7 @@ class ProviderModelMetadata:
             ],
             "context_window": self.context_window,
             "max_tokens": self.max_tokens,
+            "auto_compact_percent": self.auto_compact_percent,
             "headers": dict(self.headers),
             "compat": dict(self.compat),
             "thinking_level_map": dict(self.thinking_level_map),
@@ -483,6 +485,7 @@ def _provider_model_metadata_from_catalog(
             cost_tiers=metadata.cost_tiers,
             context_window=metadata.context_window,
             max_tokens=metadata.max_tokens,
+            auto_compact_percent=metadata.auto_compact_percent,
             headers=dict(metadata.headers),
             compat=dict(metadata.compat),
             thinking_level_map=dict(metadata.thinking_level_map),
@@ -1589,6 +1592,17 @@ def provider_model_max_tokens(provider: ProviderConfig, model: str | None = None
     return metadata.max_tokens if metadata is not None else None
 
 
+def provider_model_auto_compact_percent(
+    provider: ProviderConfig | None, model: str | None = None
+) -> int | None:
+    """Return the catalog auto-compaction percentage for a model, or None when unset."""
+    if provider is None:
+        return None
+    selected_model = model or provider.default_model
+    metadata = _metadata_for_model(provider, selected_model)
+    return metadata.auto_compact_percent if metadata is not None else None
+
+
 def provider_model_supports_images(provider: ProviderConfig, model: str | None = None) -> bool:
     selected_model = model or provider.default_model
     metadata = _metadata_for_model(provider, selected_model)
@@ -2118,6 +2132,13 @@ def _validate_model_metadata(
             raise ProviderConfigError("Provider model_metadata context_window must be positive")
         if metadata.max_tokens is not None and metadata.max_tokens <= 0:
             raise ProviderConfigError("Provider model_metadata max_tokens must be positive")
+        if (
+            metadata.auto_compact_percent is not None
+            and not 1 <= metadata.auto_compact_percent <= 100
+        ):
+            raise ProviderConfigError(
+                "Provider model_metadata auto_compact_percent must be between 1 and 100"
+            )
         if any(item not in {"text", "image"} for item in metadata.input):
             raise ProviderConfigError("Provider model_metadata input must contain text or image")
         if any(value < 0 for value in metadata.cost.values()):
@@ -2425,6 +2446,9 @@ def _model_metadata_dict(
             max_tokens=_optional_positive_int(
                 item.get("max_tokens"), f"{field_name}.{model}.max_tokens"
             ),
+            auto_compact_percent=_optional_percent(
+                item.get("auto_compact_percent"), f"{field_name}.{model}.auto_compact_percent"
+            ),
             headers=_string_dict(item.get("headers", {}), f"{field_name}.{model}.headers"),
             compat=_json_dict(item.get("compat", {}), f"{field_name}.{model}.compat"),
             thinking_level_map=_thinking_level_map_dict(
@@ -2519,6 +2543,14 @@ def _optional_positive_int(value: object, field_name: str) -> int | None:
         return None
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ProviderConfigError(f"Provider field must be a positive integer: {field_name}")
+    return value
+
+
+def _optional_percent(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 100:
+        raise ProviderConfigError(f"Provider field must be an integer from 1 to 100: {field_name}")
     return value
 
 

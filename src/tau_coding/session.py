@@ -50,6 +50,7 @@ from tau_coding.context_window import (
     SUMMARIZATION_SYSTEM_PROMPT,
     ContextUsageEstimate,
     auto_compaction_threshold_for_context_window,
+    auto_compaction_threshold_for_percent,
     build_compaction_summary_prompt,
     estimate_context_usage,
     estimate_message_tokens,
@@ -96,6 +97,7 @@ from tau_coding.provider_config import (
     load_provider_settings,
     provider_default_thinking_level,
     provider_has_usable_credentials,
+    provider_model_auto_compact_percent,
     provider_model_supports_images,
     provider_thinking_levels,
     provider_thinking_unavailable_reason,
@@ -805,11 +807,26 @@ class CodingSession:
             return None
         if self._auto_compact_token_threshold is not None:
             return self._auto_compact_token_threshold
+        percent = provider_model_auto_compact_percent(self._active_provider_config(), self.model)
+        if percent is not None:
+            return auto_compaction_threshold_for_percent(
+                self.context_window_tokens,
+                percent,
+                cap=self._runtime_effective_context_window(),
+            )
         if self._runtime_model_limits_key == (self.provider_name, self.model):
             limits = self._runtime_model_limits
             if limits is not None:
                 return limits.effective_auto_compact_token_limit
         return auto_compaction_threshold_for_context_window(self.context_window_tokens)
+
+    def _runtime_effective_context_window(self) -> int | None:
+        """Return the provider-reported usable window for the active model, if any."""
+        if self._runtime_model_limits_key == (self.provider_name, self.model):
+            limits = self._runtime_model_limits
+            if limits is not None:
+                return limits.effective_context_window
+        return None
 
     @property
     def context_window_tokens(self) -> int:

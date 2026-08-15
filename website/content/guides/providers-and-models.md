@@ -388,7 +388,11 @@ qwen-coder = 64000
 Tau loads its bundled `src/tau_coding/data/catalog.toml` first, then overlays
 `~/.tau/catalog.toml`. A user entry with the same `name` can extend or override a
 built-in provider: scalar fields replace built-in values, `models` are merged
-with your models first, and `context_windows` are merged.
+with your models first, and `context_windows` are merged. Per-model limits and
+behavior are set under `[providers.model_metadata."<model>"]`: `max_tokens`
+caps the requested output, and `auto_compact_percent` schedules automatic
+compaction at a percentage of the model's context window (see
+[Configuration]({{< relref "../reference/configuration.md#providers" >}})).
 
 There is intentionally **no project-level** `.tau/catalog.toml`. Only the
 user-level `~/.tau/catalog.toml` is loaded, so cloning a repository cannot

@@ -177,6 +177,23 @@ def auto_compaction_threshold_for_context_window(context_window_tokens: int) -> 
     return max(1, context_window_tokens - DEFAULT_COMPACTION_RESERVE_TOKENS)
 
 
+def auto_compaction_threshold_for_percent(
+    context_window_tokens: int,
+    percent: int,
+    *,
+    cap: int | None = None,
+) -> int:
+    """Return the automatic compaction threshold at a percentage of the window.
+
+    ``cap`` bounds the threshold at a provider-reported usable window so the
+    result never exceeds the context the provider will actually accept.
+    """
+    threshold = context_window_tokens * percent // 100
+    if cap is not None:
+        threshold = min(threshold, cap)
+    return max(1, threshold)
+
+
 def provider_context_tokens(message: AssistantMessage) -> int:
     """Return the provider-reported context represented by an assistant response."""
     usage = message.usage

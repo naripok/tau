@@ -5,6 +5,7 @@ from tau_agent.messages import assistant_content
 from tau_coding.context_window import (
     ContextUsageEstimate,
     auto_compaction_threshold_for_context_window,
+    auto_compaction_threshold_for_percent,
     build_compaction_summary_prompt,
     estimate_context_tokens,
     estimate_context_usage,
@@ -104,6 +105,36 @@ def test_auto_compaction_threshold_keeps_pi_style_reserve() -> None:
     assert auto_compaction_threshold_for_context_window(128_000) == 111_616
     assert auto_compaction_threshold_for_context_window(16_384) == 1
     assert auto_compaction_threshold_for_context_window(0) is None
+
+
+def test_auto_compaction_threshold_for_percent_floors_to_whole_tokens() -> None:
+    """Prove a model percent maps to floor(window * percent / 100).
+
+    Needed because 80% of a non-round window (e.g. vLLM's 210511) must yield a
+    deterministic integer threshold that both the TUI and compaction share.
+    """
+    assert auto_compaction_threshold_for_percent(210_511, 80) == 168_408
+    assert auto_compaction_threshold_for_percent(100_000, 100) == 100_000
+    assert auto_compaction_threshold_for_percent(100_000, 1) == 1_000
+
+
+def test_auto_compaction_threshold_for_percent_caps_at_provider_window() -> None:
+    """Prove a provider-reported usable window bounds the percent threshold.
+
+    Needed so a user percent above a provider's headroom (e.g. Codex live
+    limits) cannot schedule compaction beyond the context the provider accepts.
+    """
+    assert auto_compaction_threshold_for_percent(100_000, 99, cap=95_000) == 95_000
+    assert auto_compaction_threshold_for_percent(100_000, 50, cap=95_000) == 50_000
+
+
+def test_auto_compaction_threshold_for_percent_never_below_one() -> None:
+    """Prove tiny windows still yield a usable positive threshold.
+
+    Needed because a zero threshold would disable auto-compaction silently.
+    """
+    assert auto_compaction_threshold_for_percent(1, 1) == 1
+    assert auto_compaction_threshold_for_percent(2, 1, cap=1) == 1
 
 
 def test_context_usage_estimate_reports_breakdown(tmp_path: Path) -> None:

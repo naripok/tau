@@ -21,6 +21,7 @@ from tau_coding.provider_config import (
     openai_compatible_config_from_provider,
     provider_default_thinking_level,
     provider_has_usable_credentials,
+    provider_model_auto_compact_percent,
     provider_model_max_tokens,
     provider_model_supports_images,
     provider_settings_from_json,
@@ -448,6 +449,62 @@ def test_legacy_provider_model_cost_tiers_round_trip() -> None:
         provider.model_metadata["qwen"].to_json()["cost_tiers"]
         == raw["providers"][0]["model_metadata"]["qwen"]["cost_tiers"]
     )
+
+
+def test_provider_model_auto_compact_percent_round_trips_through_json() -> None:
+    """Prove a saved auto_compact_percent survives the providers.json round trip.
+
+    Needed because provider definitions saved by /login or upserts must retain
+    the per-model compaction percentage on reload.
+    """
+    raw = {
+        "default_provider": "local",
+        "providers": [
+            {
+                "type": "openai-compatible",
+                "name": "local",
+                "base_url": "http://localhost:11434/v1",
+                "api_key_env": "LOCAL_API_KEY",
+                "models": ["qwen"],
+                "default_model": "qwen",
+                "model_metadata": {"qwen": {"auto_compact_percent": 80}},
+            }
+        ],
+        "scoped_models": [],
+    }
+
+    settings = provider_settings_from_json(raw)
+    provider = settings.get_provider("local")
+    assert isinstance(provider, OpenAICompatibleProviderConfig)
+    assert provider.model_metadata["qwen"].auto_compact_percent == 80
+    assert provider.model_metadata["qwen"].to_json()["auto_compact_percent"] == 80
+
+
+@pytest.mark.parametrize("value", [0, 101, "80", 80.5, True])
+def test_provider_model_auto_compact_percent_rejects_invalid_values(value: object) -> None:
+    """Prove the JSON parser validates auto_compact_percent to 1..100 integers.
+
+    Needed because saved provider files are user-editable; an out-of-range or
+    coerced value must fail loudly instead of disabling or delaying compaction.
+    """
+    raw = {
+        "default_provider": "local",
+        "providers": [
+            {
+                "type": "openai-compatible",
+                "name": "local",
+                "base_url": "http://localhost:11434/v1",
+                "api_key_env": "LOCAL_API_KEY",
+                "models": ["qwen"],
+                "default_model": "qwen",
+                "model_metadata": {"qwen": {"auto_compact_percent": value}},
+            }
+        ],
+        "scoped_models": [],
+    }
+
+    with pytest.raises(ProviderConfigError, match="auto_compact_percent"):
+        provider_settings_from_json(raw)
 
 
 def test_legacy_provider_cost_tier_accepts_one_hour_cache_write_rate() -> None:
@@ -1208,6 +1265,27 @@ def test_provider_model_max_tokens_reads_model_metadata() -> None:
     assert provider_model_max_tokens(provider, "capped") == 64_000
     assert provider_model_max_tokens(provider, "uncapped") is None
     assert provider_model_max_tokens(provider) == 64_000
+
+
+def test_provider_model_auto_compact_percent_reads_model_metadata() -> None:
+    """Prove the session threshold lookup reads the per-model percentage.
+
+    Needed because auto-compaction resolution depends on this accessor finding
+    the value only for models that explicitly configure it.
+    """
+    provider = AnthropicProviderConfig(
+        models=("percent", "plain"),
+        default_model="percent",
+        model_metadata={
+            "percent": ProviderModelMetadata(auto_compact_percent=80),
+            "plain": ProviderModelMetadata(context_window=256_000),
+        },
+    )
+
+    assert provider_model_auto_compact_percent(provider, "percent") == 80
+    assert provider_model_auto_compact_percent(provider, "plain") is None
+    assert provider_model_auto_compact_percent(provider) == 80
+    assert provider_model_auto_compact_percent(None, "percent") is None
 
 
 @pytest.mark.parametrize(

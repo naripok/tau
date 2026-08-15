@@ -224,6 +224,22 @@ rate; entries may add an optional `cacheWrite1h` rate for Anthropic's 1-hour
 TTL cache writes, which Anthropic bills higher. When `cacheWrite1h` is absent,
 1-hour writes fall back to the `cacheWrite` rate.
 
+Model metadata can also set `auto_compact_percent` (an integer from 1 to 100)
+to schedule automatic compaction at a percentage of the model's context window:
+
+```toml
+[providers.model_metadata."long-context-model"]
+auto_compact_percent = 80
+```
+
+The threshold is the active context window times the percentage, floored to
+whole tokens, so it follows a live provider-reported window when one is
+available. When a provider reports a smaller usable window (for example Codex
+live limits), the threshold is capped at that window. The
+`--auto-compact-threshold` CLI flag (absolute tokens) takes precedence over the
+percentage, which in turn takes precedence over the provider's live default
+compaction limit and Tau's built-in reserve.
+
 ### Provider preferences
 
 Provider preferences live in `~/.tau/providers.json`:

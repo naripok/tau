@@ -677,6 +677,54 @@ cost_tiers = [
     }
 
 
+def test_user_catalog_model_metadata_auto_compact_percent_round_trips(tmp_path: Path) -> None:
+    """Prove a user catalog can set a per-model auto-compaction percentage.
+
+    Needed because local deployments (e.g. vLLM) need compaction scheduled at a
+    fixed percentage of their context window without hardcoding token counts.
+    """
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[[providers]]
+name = "minimax"
+
+[providers.model_metadata."MiniMax-M3"]
+auto_compact_percent = 80
+""",
+    )
+    entry = next(e for e in effective_catalog(paths) if e.name == "minimax")
+    assert entry.model_metadata["MiniMax-M3"].auto_compact_percent == 80
+
+    save_user_catalog_entries([entry], paths)
+    reloaded = next(e for e in effective_catalog(paths) if e.name == "minimax")
+    assert reloaded.model_metadata["MiniMax-M3"].auto_compact_percent == 80
+
+
+@pytest.mark.parametrize("value", ["0", "101", '"80"', "80.5"])
+def test_user_catalog_rejects_out_of_range_auto_compact_percent(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    """Prove auto_compact_percent is validated to an integer in 1..100.
+
+    Needed because a percent outside 1..100 would schedule compaction at a
+    nonsensical point (never, or above the window) and must fail loudly.
+    """
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        f"""
+[[providers]]
+name = "minimax"
+
+[providers.model_metadata."MiniMax-M3"]
+auto_compact_percent = {value}
+""",
+    )
+    with pytest.raises(CatalogError, match="auto_compact_percent"):
+        effective_catalog(paths)
+
+
 def test_user_catalog_rejects_bounded_final_cost_tier(tmp_path: Path) -> None:
     paths = _write_user_catalog(
         tmp_path / ".tau",

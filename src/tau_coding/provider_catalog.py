@@ -49,6 +49,7 @@ class ModelCatalogMetadata:
     cost_tiers: tuple[ModelCostTier, ...] = ()
     context_window: int | None = None
     max_tokens: int | None = None
+    auto_compact_percent: int | None = None
     headers: dict[str, str] = field(default_factory=dict)
     compat: dict[str, JSONValue] = field(default_factory=dict)
     thinking_level_map: ThinkingLevelMap = field(default_factory=dict)

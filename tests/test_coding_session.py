@@ -3482,6 +3482,169 @@ async def test_session_falls_back_when_live_model_limit_discovery_fails(
 
 
 @pytest.mark.anyio
+async def test_session_uses_model_auto_compact_percent_for_threshold(
+    tmp_path: Path,
+) -> None:
+    """Prove a per-model auto_compact_percent schedules compaction at that share.
+
+    Needed because local deployments want compaction at a fixed percentage of
+    their context window (80% of 210511 = 168408) without hardcoding tokens.
+    """
+    settings = ProviderSettings(
+        default_provider="local",
+        providers=(
+            OpenAICompatibleProviderConfig(
+                name="local",
+                models=("fake",),
+                default_model="fake",
+                context_windows={"fake": 210_511},
+                model_metadata={"fake": ProviderModelMetadata(auto_compact_percent=80)},
+            ),
+        ),
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=FakeProvider([]),
+            model="fake",
+            system="You are Tau.",
+            storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
+            cwd=tmp_path,
+            provider_name="local",
+            provider_settings=settings,
+        )
+    )
+
+    assert session.context_window_tokens == 210_511
+    assert session.auto_compact_token_threshold == 168_408
+
+
+@pytest.mark.anyio
+async def test_session_cli_threshold_overrides_model_auto_compact_percent(
+    tmp_path: Path,
+) -> None:
+    """Prove the explicit CLI threshold still wins over the model percentage.
+
+    Needed because an operator's per-run flag must keep its documented
+    precedence over catalog metadata.
+    """
+    settings = ProviderSettings(
+        default_provider="local",
+        providers=(
+            OpenAICompatibleProviderConfig(
+                name="local",
+                models=("fake",),
+                default_model="fake",
+                context_windows={"fake": 210_511},
+                model_metadata={"fake": ProviderModelMetadata(auto_compact_percent=80)},
+            ),
+        ),
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=FakeProvider([]),
+            model="fake",
+            system="You are Tau.",
+            storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
+            cwd=tmp_path,
+            provider_name="local",
+            provider_settings=settings,
+            auto_compact_token_threshold=10_000,
+        )
+    )
+
+    assert session.auto_compact_token_threshold == 10_000
+
+
+@pytest.mark.anyio
+async def test_session_model_auto_compact_percent_overrides_live_limit_default(
+    tmp_path: Path,
+) -> None:
+    """Prove an explicit model percent wins over the live-limits 90% default.
+
+    Needed because a user-set percentage is an explicit choice and must not be
+    silently replaced by the provider's live default compaction limit.
+    """
+    provider = ModelLimitsFakeProvider(
+        [],
+        limits=RuntimeModelLimits(
+            context_window=372_000,
+            max_output_tokens=128_000,
+            effective_context_window_percent=95,
+        ),
+    )
+    settings = ProviderSettings(
+        default_provider="openai-codex",
+        providers=(
+            OpenAICodexProviderConfig(
+                models=("gpt-5.6-sol",),
+                default_model="gpt-5.6-sol",
+                context_windows={"gpt-5.6-sol": 272_000},
+                model_metadata={"gpt-5.6-sol": ProviderModelMetadata(auto_compact_percent=80)},
+            ),
+        ),
+    )
+
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="gpt-5.6-sol",
+            system="You are Tau.",
+            storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
+            cwd=tmp_path,
+            provider_name="openai-codex",
+            provider_settings=settings,
+        )
+    )
+
+    assert session.context_window_tokens == 372_000
+    assert session.auto_compact_token_threshold == 297_600
+
+
+@pytest.mark.anyio
+async def test_session_model_auto_compact_percent_caps_at_live_effective_window(
+    tmp_path: Path,
+) -> None:
+    """Prove a model percent never exceeds the provider's usable window.
+
+    Needed so a percent above a provider's headroom (50% here) cannot schedule
+    compaction beyond the context the provider will actually accept.
+    """
+    provider = ModelLimitsFakeProvider(
+        [],
+        limits=RuntimeModelLimits(
+            context_window=100_000,
+            max_output_tokens=32_000,
+            effective_context_window_percent=50,
+        ),
+    )
+    settings = ProviderSettings(
+        default_provider="openai-codex",
+        providers=(
+            OpenAICodexProviderConfig(
+                models=("gpt-5.6-sol",),
+                default_model="gpt-5.6-sol",
+                context_windows={"gpt-5.6-sol": 100_000},
+                model_metadata={"gpt-5.6-sol": ProviderModelMetadata(auto_compact_percent=80)},
+            ),
+        ),
+    )
+
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="gpt-5.6-sol",
+            system="You are Tau.",
+            storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
+            cwd=tmp_path,
+            provider_name="openai-codex",
+            provider_settings=settings,
+        )
+    )
+
+    assert session.auto_compact_token_threshold == 50_000
+
+
+@pytest.mark.anyio
 async def test_session_compacts_and_retries_once_after_context_overflow(
     tmp_path: Path,
 ) -> None:
