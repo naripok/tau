@@ -7,6 +7,7 @@ from pi_event_helpers import (
     assistant_done,
     assistant_error,
     assistant_start,
+    retryable_error,
     text_delta,
     thinking_delta,
     tool_call_end,
@@ -25,6 +26,7 @@ from tau_agent import (
     ToolExecutionEndEvent,
     ToolExecutionUpdateEvent,
     ToolResultMessage,
+    TurnRetryStartEvent,
     UserMessage,
 )
 from tau_agent.loop import run_agent_loop
@@ -421,3 +423,214 @@ async def test_agent_loop_stops_with_assistant_error_after_max_turns() -> None:
     assert error.stop_reason == "error"
     assert error.error_message == "Agent stopped after max_turns=1"
     assert len(provider.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_agent_loop_retries_transient_failure_then_succeeds() -> None:
+    """Prove a retryable failure is retried invisibly and never touches history."""
+    messages: list[AgentMessage] = [UserMessage(content="hello")]
+    recovered = AssistantMessage(content="recovered", model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), text_delta("partial"), retryable_error("peer closed connection")],
+            [assistant_start(), text_delta("recovered"), assistant_done(recovered)],
+        ]
+    )
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+            max_turn_retries=2,
+        )
+    )
+
+    retries = [event for event in events if isinstance(event, TurnRetryStartEvent)]
+    assert len(retries) == 1
+    assert retries[0].attempt == 2
+    assert retries[0].max_attempts == 3
+    assert retries[0].error_message == "peer closed connection"
+    assert messages[-1] is recovered
+    assert len(provider.calls) == 2
+    assert provider.calls[0][2] == provider.calls[1][2]
+    assert not any(
+        isinstance(event, MessageEndEvent)
+        and isinstance(event.message, AssistantMessage)
+        and event.message.stop_reason == "error"
+        for event in events
+    )
+
+
+@pytest.mark.anyio
+async def test_agent_loop_exhausts_turn_retry_budget() -> None:
+    """Prove two retries are allowed and the third failure ends the run as today."""
+    messages: list[AgentMessage] = [UserMessage(content="hello")]
+    provider = FakeProvider(
+        [
+            [assistant_start(), text_delta("a"), retryable_error("drop 1", partial="a")],
+            [assistant_start(), text_delta("b"), retryable_error("drop 2", partial="b")],
+            [assistant_start(), text_delta("c"), retryable_error("drop 3", partial="c")],
+        ]
+    )
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+            max_turn_retries=2,
+        )
+    )
+
+    assert sum(isinstance(event, TurnRetryStartEvent) for event in events) == 2
+    assert len(provider.calls) == 3
+    final = messages[-1]
+    assert isinstance(final, AssistantMessage)
+    assert final.stop_reason == "error"
+    assert final.error_message == "drop 3"
+    assert final.text == "c"
+
+
+@pytest.mark.anyio
+async def test_agent_loop_turn_retry_disabled_with_zero_budget() -> None:
+    """Prove a zero budget keeps today's terminal behavior exactly."""
+    provider = FakeProvider(
+        [[assistant_start(), text_delta("partial"), retryable_error("drop", partial="partial")]]
+    )
+    messages: list[AgentMessage] = [UserMessage(content="hello")]
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+            max_turn_retries=0,
+        )
+    )
+
+    assert not any(isinstance(event, TurnRetryStartEvent) for event in events)
+    assert len(provider.calls) == 1
+    assert messages[-1].stop_reason == "error"
+
+
+@pytest.mark.anyio
+async def test_agent_loop_does_not_retry_non_retryable_error() -> None:
+    """Prove only adapter-classified transient failures trigger a retry."""
+    provider = FakeProvider([[assistant_error("invalid api key")]])
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=[UserMessage(content="hello")],
+            tools=[],
+            max_turn_retries=2,
+        )
+    )
+
+    assert not any(isinstance(event, TurnRetryStartEvent) for event in events)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_agent_loop_retry_backoff_delays_grow() -> None:
+    """Prove retry delays are exponential and stop at the one-second cap."""
+    provider = FakeProvider(
+        [
+            [assistant_start(), retryable_error("1")],
+            [assistant_start(), retryable_error("2")],
+            [assistant_start(), retryable_error("3")],
+            [assistant_start(), assistant_done(AssistantMessage(content="ok", model="fake"))],
+        ]
+    )
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=[UserMessage(content="hello")],
+            tools=[],
+            max_turn_retries=3,
+        )
+    )
+
+    assert [event.delay_seconds for event in events if isinstance(event, TurnRetryStartEvent)] == [
+        0.25,
+        0.5,
+        1.0,
+    ]
+
+
+@pytest.mark.anyio
+async def test_agent_loop_cancel_during_retry_backoff_discards_partial() -> None:
+    """Prove cancelling during backoff ends the run with the partial discarded."""
+    messages: list[AgentMessage] = [UserMessage(content="hello")]
+    provider = FakeProvider(
+        [[assistant_start(), text_delta("partial"), retryable_error("drop", partial="partial")]]
+    )
+    signal = SimpleCancellationToken()
+    events: list[AgentEvent] = []
+
+    async for event in run_agent_loop(
+        provider=provider,
+        model="fake",
+        system="You are Tau.",
+        messages=messages,
+        tools=[],
+        signal=signal,
+        max_turn_retries=2,
+    ):
+        events.append(event)
+        if isinstance(event, TurnRetryStartEvent):
+            signal.cancel()
+
+    assert len(provider.calls) == 1
+    assert sum(isinstance(event, TurnRetryStartEvent) for event in events) == 1
+    final = messages[-1]
+    assert isinstance(final, AssistantMessage)
+    assert final.stop_reason == "error"
+    assert final.error_message == "drop"
+    assert not final.content
+
+
+@pytest.mark.anyio
+async def test_agent_loop_cancel_during_reattempt_ends_run() -> None:
+    """Prove cancelling a reattempt never triggers further attempts."""
+    provider = FakeProvider(
+        [
+            [assistant_start(), text_delta("partial"), retryable_error("drop")],
+            [
+                assistant_start(),
+                text_delta("re"),
+                assistant_done(AssistantMessage(content="done", model="fake")),
+            ],
+        ]
+    )
+    signal = SimpleCancellationToken()
+    events: list[AgentEvent] = []
+
+    async for event in run_agent_loop(
+        provider=provider,
+        model="fake",
+        system="You are Tau.",
+        messages=[UserMessage(content="hello")],
+        tools=[],
+        signal=signal,
+        max_turn_retries=2,
+    ):
+        events.append(event)
+        if isinstance(event, MessageUpdateEvent) and event.message.text == "re":
+            signal.cancel()
+
+    assert len(provider.calls) == 2
+    assert sum(isinstance(event, TurnRetryStartEvent) for event in events) == 1
+    assert events[-1].type == "agent_end"

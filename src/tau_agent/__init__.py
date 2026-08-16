@@ -13,9 +13,11 @@ from tau_agent.events import (
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
     TurnEndEvent,
+    TurnRetryStartEvent,
     TurnStartEvent,
 )
 from tau_agent.harness import (
+    DEFAULT_TURN_RETRIES,
     AgentHarness,
     AgentHarnessConfig,
     EventListener,

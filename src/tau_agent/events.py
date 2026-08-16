@@ -31,6 +31,18 @@ class TurnEndEvent(WireModel):
     tool_results: list[ToolResultMessage] = Field(default_factory=list)
 
 
+class TurnRetryStartEvent(WireModel):
+    """A transient provider failure will be retried; the failed partial is void."""
+
+    type: Literal["turn_retry_start"] = "turn_retry_start"
+    attempt: int
+    max_attempts: int
+    delay_seconds: float
+    reason: str
+    error_message: str = ""
+    error_type: str | None = None
+
+
 class MessageStartEvent(WireModel):
     type: Literal["message_start"] = "message_start"
     message: AgentMessage
@@ -76,6 +88,7 @@ type AgentEvent = Annotated[
     AgentStartEvent
     | AgentEndEvent
     | TurnStartEvent
+    | TurnRetryStartEvent
     | TurnEndEvent
     | MessageStartEvent
     | MessageUpdateEvent

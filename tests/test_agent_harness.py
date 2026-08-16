@@ -1,10 +1,18 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 
 import pytest
 
-from pi_event_helpers import assistant_done, assistant_start, text_delta, tool_call_end
+from pi_event_helpers import (
+    assistant_done,
+    assistant_start,
+    retryable_error,
+    text_delta,
+    tool_call_end,
+)
 from tau_agent import (
+    DEFAULT_TURN_RETRIES,
+    AgentEvent,
     AgentHarness,
     AgentHarnessConfig,
     AgentTool,
@@ -15,6 +23,7 @@ from tau_agent import (
     TextContent,
     ToolCall,
     ToolResultMessage,
+    TurnRetryStartEvent,
 )
 from tau_agent.types import JSONValue
 from tau_ai import FakeProvider
@@ -356,3 +365,42 @@ async def test_entry_path_repair_is_pushed_to_listeners() -> None:
         if isinstance(event, MessageEndEvent) and isinstance(event.message, ToolResultMessage)
     ]
     assert consumer_ends == ["call-1"]
+
+
+async def _collect(stream: AsyncIterator[AgentEvent]) -> list[AgentEvent]:
+    return [event async for event in stream]
+
+
+@pytest.mark.anyio
+async def test_harness_retries_transient_failures_with_configured_budget() -> None:
+    """Prove the harness applies its configured turn-retry budget to prompts."""
+    recovered = AssistantMessage(content="recovered", model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), text_delta("partial"), retryable_error("drop")],
+            [assistant_start(), assistant_done(recovered)],
+        ]
+    )
+    harness = AgentHarness(
+        AgentHarnessConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            max_turn_retries=1,
+        )
+    )
+
+    events = await _collect(harness.prompt("hello"))
+
+    assert sum(isinstance(event, TurnRetryStartEvent) for event in events) == 1
+    assert harness.messages[-1] is recovered
+    assert harness.messages[-1].stop_reason == "stop"
+
+
+@pytest.mark.anyio
+async def test_harness_default_turn_retry_budget_is_two() -> None:
+    """Prove the unconfigured harness budget matches the spec default of two."""
+    provider = FakeProvider([[]])
+    config = AgentHarnessConfig(provider=provider, model="fake", system="You are Tau.")
+
+    assert config.max_turn_retries == DEFAULT_TURN_RETRIES

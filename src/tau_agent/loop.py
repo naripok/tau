@@ -16,6 +16,7 @@ from tau_agent.events import (
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
     TurnEndEvent,
+    TurnRetryStartEvent,
     TurnStartEvent,
 )
 from tau_agent.messages import (
@@ -29,9 +30,9 @@ from tau_agent.provider import CancellationToken, ModelProvider
 from tau_agent.provider_events import (
     AssistantDoneEvent,
     AssistantErrorEvent,
-    AssistantMessageEvent,
     AssistantStartEvent,
 )
+from tau_agent.retry import turn_retry_delay_seconds, wait_for_retry
 from tau_agent.tool_history import repair_tool_history
 from tau_agent.tools import AgentTool, AgentToolResult
 
@@ -52,6 +53,7 @@ async def run_agent_loop(
     prompts: Sequence[AgentMessage] = (),
     prelude_messages: Sequence[AgentMessage] = (),
     max_turns: int | None = None,
+    max_turn_retries: int = 0,
     signal: CancellationToken | None = None,
     session_id: str | None = None,
     get_steering_messages: Callable[[], Sequence[AgentMessage]] | None = None,
@@ -124,6 +126,7 @@ async def run_agent_loop(
                 tools=tools,
                 signal=signal,
                 session_id=session_id,
+                max_turn_retries=max_turn_retries,
             ):
                 yield event
                 if isinstance(event, MessageEndEvent) and isinstance(
@@ -203,33 +206,88 @@ async def _assistant_events(
     tools: list[AgentTool],
     signal: CancellationToken | None,
     session_id: str | None,
+    max_turn_retries: int,
 ) -> AsyncIterator[AgentEvent]:
-    source: AsyncIterator[AssistantMessageEvent] = provider.stream_response(
-        model=model,
-        system=system,
-        messages=messages,
-        tools=tools,
-        signal=signal,
-        session_id=session_id,
-    )
-    started = False
-    async for event in source:
-        if isinstance(event, AssistantStartEvent):
-            started = True
-            yield MessageStartEvent(message=event.partial)
-        elif isinstance(event, AssistantDoneEvent):
-            if not started:
-                yield MessageStartEvent(message=event.message)
-            yield MessageEndEvent(message=event.message)
-        elif isinstance(event, AssistantErrorEvent):
-            if not started:
-                yield MessageStartEvent(message=event.error)
-            yield MessageEndEvent(message=event.error)
-        else:
-            yield MessageUpdateEvent(
-                message=event.partial,
-                assistant_message_event=event,
-            )
+    """Stream one turn's provider response, retrying transient failures.
+
+    A failed attempt that the provider classified as retryable is discarded:
+    consumers never see its terminal error end, only a retry-start notice
+    followed by the reattempt's stream. The failed message is never added to
+    harness history because the caller appends only the final message.
+    """
+    retries_done = 0
+    while True:
+        source = provider.stream_response(
+            model=model,
+            system=system,
+            messages=messages,
+            tools=tools,
+            signal=signal,
+            session_id=session_id,
+        )
+        started = False
+        retry_failure: AssistantMessage | None = None
+        async for event in source:
+            if isinstance(event, AssistantErrorEvent):
+                if (
+                    event.retryable
+                    and retries_done < max_turn_retries
+                    and (signal is None or not signal.is_cancelled())
+                ):
+                    retry_failure = event.error
+                    break
+                if not started:
+                    yield MessageStartEvent(message=event.error)
+                yield MessageEndEvent(message=event.error)
+                return
+            if isinstance(event, AssistantStartEvent):
+                started = True
+                yield MessageStartEvent(message=event.partial)
+            elif isinstance(event, AssistantDoneEvent):
+                if not started:
+                    yield MessageStartEvent(message=event.message)
+                yield MessageEndEvent(message=event.message)
+                return
+            else:
+                yield MessageUpdateEvent(
+                    message=event.partial,
+                    assistant_message_event=event,
+                )
+        if retry_failure is None:
+            return
+        delay = turn_retry_delay_seconds(retries_done)
+        reason, error_type = _retry_failure_reason(retry_failure)
+        yield TurnRetryStartEvent(
+            attempt=retries_done + 2,
+            max_attempts=max_turn_retries + 1,
+            delay_seconds=delay,
+            reason=reason,
+            error_message=retry_failure.error_message or "",
+            error_type=error_type,
+        )
+        retries_done += 1
+        if not await wait_for_retry(delay, signal=signal):
+            # Cancelled during the backoff: surface the retryable failure as a
+            # terminal error without restoring its discarded partial content.
+            discarded = retry_failure.model_copy(deep=True)
+            discarded.content = []
+            yield MessageStartEvent(message=discarded)
+            yield MessageEndEvent(message=discarded)
+            return
+
+
+def _retry_failure_reason(message: AssistantMessage) -> tuple[str, str | None]:
+    """Return a short (reason, error_type) pair for a retryable failure."""
+    for diagnostic in message.diagnostics or []:
+        if diagnostic.type != "provider_error" or not diagnostic.details:
+            continue
+        error_type = diagnostic.details.get("error_type")
+        if isinstance(error_type, str) and error_type:
+            return f"network error ({error_type})", error_type
+        status_code = diagnostic.details.get("status_code")
+        if isinstance(status_code, int) and not isinstance(status_code, bool):
+            return f"HTTP {status_code}", f"HTTP {status_code}"
+    return "provider error", None
 
 
 async def _execute_tool_call(

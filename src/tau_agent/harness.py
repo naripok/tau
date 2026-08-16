@@ -35,6 +35,9 @@ class QueuedMessages:
         return len(self.steering) + len(self.follow_up)
 
 
+DEFAULT_TURN_RETRIES = 2
+
+
 @dataclass(slots=True)
 class AgentHarnessConfig:
     provider: ModelProvider
@@ -42,6 +45,7 @@ class AgentHarnessConfig:
     system: str
     tools: list[AgentTool] = field(default_factory=list)
     max_turns: int | None = None
+    max_turn_retries: int = DEFAULT_TURN_RETRIES
     queue_mode: QueueMode = "one_at_a_time"
     session_id: str | None = None
     before_tool_call: BeforeToolCall | None = None
@@ -180,6 +184,7 @@ class AgentHarness:
                 prelude_messages=repairs,
                 tools=self._config.tools,
                 max_turns=self._config.max_turns,
+                max_turn_retries=self._config.max_turn_retries,
                 signal=signal,
                 session_id=self._config.session_id,
                 get_steering_messages=self._drain_steering_messages,
