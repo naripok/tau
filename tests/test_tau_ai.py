@@ -3726,3 +3726,279 @@ async def test_openai_compatible_tail_read_completes_with_diagnostic() -> None:
     assert any(
         diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
     )
+
+
+@pytest.mark.anyio
+async def test_anthropic_marks_mid_stream_transport_drop_retryable() -> None:
+    """Prove an Anthropic transport drop after content is classified retryable."""
+    requests: list[httpx.Request] = []
+
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield (
+                b'data: {"type":"content_block_delta","delta":'
+                b'{"type":"text_delta","text":"partial"}}\n\n'
+            )
+            raise httpx.ReadError("stream dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=FailingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                provider_name="anthropic",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+
+
+@pytest.mark.anyio
+async def test_anthropic_in_stream_overload_after_content_is_retryable() -> None:
+    """Prove an in-stream overload error after content is classified retryable."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"content_block_delta","delta":'
+                '{"type":"text_delta","text":"partial"}}\n\n'
+                'data: {"type":"error","error":'
+                '{"type":"overloaded_error","message":"Overloaded"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                provider_name="anthropic",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+
+
+@pytest.mark.anyio
+async def test_anthropic_in_stream_usage_marker_not_retryable() -> None:
+    """Prove a rate-limit stream error with a usage marker stays terminal."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"content_block_delta","delta":'
+                '{"type":"text_delta","text":"partial"}}\n\n'
+                'data: {"type":"error","error":'
+                '{"type":"rate_limit_error","message":"monthly usage limit reached"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                provider_name="anthropic",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is False
+
+
+@pytest.mark.anyio
+async def test_anthropic_tail_read_completes_with_diagnostic() -> None:
+    """Prove an Anthropic drop after message_stop completes the message."""
+    requests: list[httpx.Request] = []
+
+    class TailDroppingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield (
+                b'data: {"type":"content_block_delta","index":0,"delta":'
+                b'{"type":"text_delta","text":"done"}}\n\n'
+                b'data: {"type":"message_stop"}\n\n'
+            )
+
+        async def aclose(self) -> None:
+            raise httpx.ReadError("tail dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=TailDroppingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                provider_name="anthropic",
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert events[-1].type == "done"
+    message = events[-1].message
+    assert message.text == "done"
+    assert any(
+        diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
+    )
+
+
+@pytest.mark.anyio
+async def test_openai_codex_in_stream_overload_after_content_is_retryable() -> None:
+    """Prove a Codex in-stream overload error after content is classified retryable."""
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = (
+            'data: {"type":"response.output_text.delta","delta":"partial","item_id":"i1",'
+            '"output_index":0,"sequence_number":1}\n\n'
+            'data: {"type":"error","error":{"type":"service_unavailable_error",'
+            '"code":"server_is_overloaded","message":"Our servers are currently overloaded."},'
+            '"sequence_number":2}\n\n'
+        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                provider_name="openai-codex",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+
+
+@pytest.mark.anyio
+async def test_openai_codex_tail_read_completes_with_diagnostic() -> None:
+    """Prove a Codex drop after response.completed completes the message."""
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    class TailDroppingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield (
+                b'data: {"type":"response.output_text.delta","delta":"done","item_id":"i1",'
+                b'"output_index":0,"sequence_number":1}\n\n'
+                b'data: {"type":"response.completed","response":{"id":"r1",'
+                b'"status":"completed","output":[]}}\n\n'
+            )
+
+        async def aclose(self) -> None:
+            raise httpx.ReadError("tail dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=TailDroppingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                provider_name="openai-codex",
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert events[-1].type == "done"
+    message = events[-1].message
+    assert "done" in message.text
+    assert any(
+        diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
+    )

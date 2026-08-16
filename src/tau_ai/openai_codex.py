@@ -32,6 +32,11 @@ from tau_ai._provider_events import (
     ProviderThinkingDeltaEvent,
     ProviderToolCallEvent,
 )
+from tau_ai.classify import (
+    is_context_overflow,
+    is_retryable_http_failure,
+    is_terminal_rate_limit,
+)
 from tau_ai.content import (
     NON_VISION_TOOL_IMAGE_PLACEHOLDER,
     NON_VISION_USER_IMAGE_PLACEHOLDER,
@@ -49,7 +54,7 @@ from tau_ai.model_limits import RuntimeModelLimits
 from tau_ai.openai_cache import openai_prompt_cache_key
 from tau_ai.provider import CancellationToken
 from tau_ai.retry import provider_retry_event, retry_delay_seconds, wait_for_retry
-from tau_ai.stream import canonicalize_provider_stream
+from tau_ai.stream import attach_tail_read_diagnostic, canonicalize_provider_stream
 
 DEFAULT_OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 
@@ -183,6 +188,7 @@ class OpenAICodexProvider:
             url = _resolve_codex_url(self._config.base_url)
 
             attempt = 0
+            final_event: ProviderResponseEndEvent | None = None
             while True:
                 emitted_content = False
                 emitted_thinking = False
@@ -239,12 +245,18 @@ class OpenAICodexProvider:
                                     "body": body_text,
                                     "attempts": attempt + 1,
                                 },
+                                retryable=is_retryable_http_failure(
+                                    response.status_code, body_text
+                                ),
                             )
                             return
 
                         yield ProviderResponseStartEvent(model=model)
                         stream_error: dict[str, JSONValue] | None = None
                         async for event in _codex_provider_events(response, signal=signal):
+                            if isinstance(event, ProviderResponseEndEvent):
+                                final_event = event
+                                continue
                             if isinstance(
                                 event,
                                 ProviderTextDeltaEvent | ProviderToolCallEvent,
@@ -263,6 +275,8 @@ class OpenAICodexProvider:
                                 break
                             yield event
                         if stream_error is None:
+                            if final_event is not None:
+                                yield final_event
                             return
                         code, _message = _stream_error_details(stream_error)
                         delay = retry_delay_seconds(
@@ -281,6 +295,9 @@ class OpenAICodexProvider:
                             return
                         continue
                 except httpx.HTTPError as exc:
+                    if final_event is not None:
+                        yield attach_tail_read_diagnostic(final_event, exc)
+                        return
                     if not emitted_content and self._should_retry(attempt):
                         delay = retry_delay_seconds(
                             attempt,
@@ -302,7 +319,11 @@ class OpenAICodexProvider:
                         continue
                     yield ProviderErrorEvent(
                         message=str(exc),
-                        data={"attempts": attempt + 1},
+                        data={
+                            "attempts": attempt + 1,
+                            "error_type": type(exc).__name__,
+                        },
+                        retryable=True,
                     )
                     return
                 except Exception as exc:  # noqa: BLE001 - provider errors are surfaced as events
@@ -325,7 +346,7 @@ class OpenAICodexProvider:
     ) -> bool:
         if attempt >= self._config.max_retries:
             return False
-        return status_code is None or _is_retryable_status(status_code, body)
+        return status_code is None or is_retryable_http_failure(status_code, body)
 
 
 class _ToolCallBuilder:
@@ -525,17 +546,19 @@ async def _codex_provider_events(
             continue
 
         if event_type == "error":
-            yield ProviderErrorEvent(
+            produced = ProviderErrorEvent(
                 message=_error_message(event, fallback="OpenAI Codex returned an error"),
                 data={"event": event},
             )
+            yield _classify_stream_error(produced)
             return
 
         if event_type == "response.failed":
-            yield ProviderErrorEvent(
+            produced = ProviderErrorEvent(
                 message=_response_error_message(event),
                 data={"event": event},
             )
+            yield _classify_stream_error(produced)
             return
 
         if event_type == "response.output_item.added":
@@ -954,6 +977,20 @@ def _stream_error_event_data(event: ProviderErrorEvent) -> dict[str, JSONValue] 
     return raw if isinstance(raw, dict) else None
 
 
+def _classify_stream_error(event: ProviderErrorEvent) -> ProviderErrorEvent:
+    """Return an in-stream Codex error event with its retryable classification.
+
+    The transient marker match decides retryability; context-overflow messages
+    stay terminal even when a marker matches.
+    """
+    retryable = _retryable_stream_error_event(event)
+    if retryable:
+        code, message = _stream_error_details(_stream_error_event_data(event) or {})
+        if is_context_overflow(" ".join(part for part in (code, message) if part)):
+            retryable = False
+    return event.model_copy(update={"retryable": retryable})
+
+
 def _retryable_stream_error_event(event: ProviderErrorEvent) -> bool:
     """Return True when an in-stream Codex error looks transient and retryable."""
     raw = _stream_error_event_data(event)
@@ -961,7 +998,7 @@ def _retryable_stream_error_event(event: ProviderErrorEvent) -> bool:
         return False
     code, message = _stream_error_details(raw)
     haystack = " ".join(part for part in (code, message) if part).lower()
-    if not haystack or _is_terminal_rate_limit(haystack):
+    if not haystack or is_terminal_rate_limit(haystack):
         return False
     return any(marker in haystack for marker in _TRANSIENT_STREAM_ERROR_MARKERS)
 
@@ -1059,22 +1096,4 @@ def _loads_object(value: str) -> dict[str, JSONValue] | None:
     return None
 
 
-def _is_retryable_status(status_code: int, body: str) -> bool:
-    if status_code == 429 and _is_terminal_rate_limit(body):
-        return False
-    return status_code in {408, 409, 425, 429} or status_code >= 500
 
-
-def _is_terminal_rate_limit(body: str) -> bool:
-    normalized = body.lower()
-    markers = (
-        "gousagelimiterror",
-        "freeusagelimiterror",
-        "monthly usage limit reached",
-        "available balance",
-        "insufficient_quota",
-        "out of budget",
-        "quota exceeded",
-        "billing",
-    )
-    return any(marker in normalized for marker in markers)
