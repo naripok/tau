@@ -1977,7 +1977,7 @@ Delete the local `_is_terminal_rate_limit` function and replace `_is_retryable_s
                             return
 ```
 
-2. Buffer the response-end event and reclassify the in-stream error. Declare before `try:`:
+2. Buffer the response-end event until the stream fully ends. Declare before `try:`:
 
 ```python
             attempt = 0
