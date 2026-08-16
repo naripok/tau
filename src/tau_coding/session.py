@@ -9,7 +9,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from tau_agent.events import AgentEndEvent, AgentEvent, MessageEndEvent, ToolExecutionEndEvent
+from tau_agent.events import (
+    AgentEndEvent,
+    AgentEvent,
+    MessageEndEvent,
+    ToolExecutionEndEvent,
+    TurnRetryStartEvent,
+)
 from tau_agent.harness import AgentHarness, AgentHarnessConfig, QueuedMessages
 from tau_agent.messages import (
     AgentMessage,
@@ -2038,6 +2044,15 @@ class CodingSession:
                     )
                     if is_context_overflow_error(event.message):
                         overflow_message = event.message
+                if isinstance(event, TurnRetryStartEvent):
+                    self._last_diagnostic_log_path = self._diagnostic_logger.log_turn_retry(
+                        context=context,
+                        attempt=event.attempt,
+                        max_attempts=event.max_attempts,
+                        reason=event.reason,
+                        error_message=event.error_message,
+                        error_type=event.error_type,
+                    )
                 if isinstance(event, AgentEndEvent):
                     yield SessionAgentEndEvent(messages=event.messages, will_retry=False)
                 else:
@@ -2084,6 +2099,17 @@ class CodingSession:
                                     context=context,
                                     phase="agent_loop_retry",
                                     message=retry_event.message,
+                                )
+                            )
+                        if isinstance(retry_event, TurnRetryStartEvent):
+                            self._last_diagnostic_log_path = (
+                                self._diagnostic_logger.log_turn_retry(
+                                    context=context,
+                                    attempt=retry_event.attempt,
+                                    max_attempts=retry_event.max_attempts,
+                                    reason=retry_event.reason,
+                                    error_message=retry_event.error_message,
+                                    error_type=retry_event.error_type,
                                 )
                             )
                         if isinstance(retry_event, AgentEndEvent):
@@ -2138,6 +2164,15 @@ class CodingSession:
                         context=context,
                         phase="agent_loop",
                         message=event.message,
+                    )
+                if isinstance(event, TurnRetryStartEvent):
+                    self._last_diagnostic_log_path = self._diagnostic_logger.log_turn_retry(
+                        context=context,
+                        attempt=event.attempt,
+                        max_attempts=event.max_attempts,
+                        reason=event.reason,
+                        error_message=event.error_message,
+                        error_type=event.error_type,
                     )
                 if isinstance(event, AgentEndEvent):
                     yield SessionAgentEndEvent(messages=event.messages, will_retry=False)

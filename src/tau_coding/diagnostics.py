@@ -73,6 +73,30 @@ class AgentCallDiagnosticLogger:
         self._append(entry)
         return self.path
 
+    def log_turn_retry(
+        self,
+        *,
+        context: AgentCallDiagnosticContext,
+        attempt: int,
+        max_attempts: int,
+        reason: str,
+        error_message: str,
+        error_type: str | None,
+    ) -> Path:
+        """Log one harness turn-level retry for a transient provider failure."""
+        entry = _base_entry(context, phase="agent_loop", kind="assistant_retry")
+        retry: dict[str, Any] = {
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "reason": reason,
+            "error_message": error_message,
+        }
+        if error_type:
+            retry["error_type"] = error_type
+        entry["retry"] = retry
+        self._append(entry)
+        return self.path
+
     def _append(self, entry: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
