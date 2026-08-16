@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
+import time
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
@@ -2948,6 +2950,24 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
 #: here to the pre-dispatch interceptor rather than a registerShortcut API.
 RESERVED_EXTENSION_INTERCEPTOR_KEYS: frozenset[str] = frozenset({"ctrl+c", "ctrl+d"})
 
+#: Development-only slow-interceptor diagnostic. Interceptors run synchronously
+#: on every main-screen key before Textual dispatch, so a handler that exceeds
+#: this is doing work (disk/network/traversal) that does not belong on the input
+#: path and stalls every keystroke while it runs. Off by default so the
+#: production hot path pays nothing; enabled with ``TAU_DEBUG_TUI_PERF=1``.
+_KEY_INTERCEPTOR_SLOW_SECONDS = 0.005
+_TUI_PERF_DEBUG_ENV = "TAU_DEBUG_TUI_PERF"
+
+
+def _tui_perf_debug_enabled() -> bool:
+    """Return whether the development-only TUI perf diagnostic is on.
+
+    Reads ``TAU_DEBUG_TUI_PERF`` (off when unset) so production never pays
+    for the measurement; tests may monkeypatch this helper directly if env
+    manipulation is awkward.
+    """
+    return os.environ.get(_TUI_PERF_DEBUG_ENV) == "1"
+
 
 class TauTuiApp(App[None]):
     """Interactive Textual frontend for a ``CodingSession``."""
@@ -3578,6 +3598,9 @@ class TauTuiApp(App[None]):
         self._extension_main_view_lock = asyncio.Lock()
         self._extension_swap_tasks: set[asyncio.Task[None]] = set()
         self._extension_component_failures_reported: set[str] = set()
+        # Dev-only: key interceptors already warned about as slow (per id), so
+        # a hot slow handler logs once instead of spamming every keypress.
+        self._slow_key_interceptor_warnings: set[int] = set()
         self._connect_extension_runtime(session)
         self._prompt_worker: Worker[None] | None = None
         self._compaction_worker: Worker[None] | None = None
@@ -4299,19 +4322,62 @@ class TauTuiApp(App[None]):
         Each call is guarded: a raising interceptor is diagnosed once and
         treated as "not consumed", so a broken interceptor degrades to normal
         typing rather than a dead prompt.
+
+        Timing is development-only and off by default: unless
+        ``TAU_DEBUG_TUI_PERF`` is set, no clock is read and nothing is logged,
+        so the production hot path is behaviorally unchanged. Interceptors run
+        synchronously on every main-screen key before Textual dispatch, so an
+        extension doing disk/network/traversal work here stalls the whole UI;
+        debug mode surfaces those offenders (once each) with zero production
+        cost.
         """
+        debug = _tui_perf_debug_enabled()
         for interceptor in tuple(self._extension_key_interceptors):
+            start = time.perf_counter() if debug else 0.0
             try:
-                if interceptor(event, text):
-                    return True
+                result = interceptor(event, text)
             except Exception as exc:  # noqa: BLE001 - isolation boundary
+                if debug:
+                    self._warn_slow_key_interceptor(
+                        interceptor, time.perf_counter() - start
+                    )
                 # Notify like the other failure classes so a broken interceptor
                 # is not silently invisible, and dedup per-interceptor so a
                 # second faulty handler still gets diagnosed.
                 self._record_extension_component_failure(
                     f"key_interceptor:{id(interceptor)}", exc, notify=True
                 )
+                continue
+            if debug:
+                self._warn_slow_key_interceptor(
+                    interceptor, time.perf_counter() - start
+                )
+            if result:
+                return True
         return False
+
+    def _warn_slow_key_interceptor(self, interceptor: object, elapsed: float) -> None:
+        """Log a one-time development-only warning for a slow key interceptor.
+
+        Only reachable while ``TAU_DEBUG_TUI_PERF`` is enabled. A handler that
+        exceeds ``_KEY_INTERCEPTOR_SLOW_SECONDS`` is doing work that does not
+        belong on the input path; the warning is deduplicated per interceptor
+        (so a hot slow handler does not spam the debug log) and logged rather
+        than notified (so it never appears in the normal UI).
+        """
+        if elapsed <= _KEY_INTERCEPTOR_SLOW_SECONDS:
+            return
+        interceptor_id = id(interceptor)
+        if interceptor_id in self._slow_key_interceptor_warnings:
+            return
+        self._slow_key_interceptor_warnings.add(interceptor_id)
+        name = getattr(interceptor, "__qualname__", None) or repr(interceptor)
+        # Guarded like _record_extension_component_failure's log: this
+        # diagnostic must never break the input path.
+        with suppress(Exception):
+            self.log.warning(
+                f"slow TUI key interceptor ({name}): extension took {elapsed * 1000:.1f} ms"
+            )
 
     def _schedule_extension_swap(self, coro: Coroutine[object, object, None]) -> None:
         """Run a slot/main-view reconcile coroutine on the app loop.
@@ -4555,6 +4621,8 @@ class TauTuiApp(App[None]):
         self._extension_key_interceptors.clear()
         # A recurring failure context must notify again in the new world.
         self._extension_component_failures_reported.clear()
+        # Likewise, a slow handler in the new world is worth warning about again.
+        self._slow_key_interceptor_warnings.clear()
 
     def _tracked_extension_widgets(self) -> tuple[Widget, ...]:
         """Return every extension widget the host currently tracks (intended or mounted)."""
