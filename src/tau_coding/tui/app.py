@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
@@ -6263,43 +6264,96 @@ def _visible_completion_state(
     max_lines: int,
     width: int | None = None,
 ) -> CompletionState:
-    """Return a completion-state window with the selected item visible."""
+    """Return a completion-state window with the selected item visible.
+
+    The window is derived from a single measurement pass: every item's wrapped
+    height is measured once up front, prefix sums over item rows and category
+    separators then answer each candidate window's line metrics in O(1), and
+    the three trimming loops never re-measure (or re-render) the same item.
+    """
     if not state.items or max_lines <= 0:
         return CompletionState()
 
+    items = state.items
+    selected_index = state.selected_index
+    item_count = len(items)
     selected_line_limit = max(max_lines - 1, 1)
-    start = 0
-    while start < state.selected_index:
-        candidate = CompletionState(
-            items=state.items[start:],
-            selected_index=state.selected_index - start,
+    extra_lines = [
+        _completion_item_extra_wrapped_lines(item, width=width) for item in items
+    ]
+
+    # Prefix sums over the full item list, computed once: ``row_prefix[i]`` is
+    # the row count (1 row plus wrapped extras) consumed by ``items[:i]``;
+    # ``blank_prefix[i]``/``header_prefix[i]`` count the blank divider and
+    # category-header rows introduced by category changes up to and including
+    # item ``i``. A window starting at ``start`` re-renders its own header, so
+    # every window metric combines a fresh first-header term with prefix deltas.
+    row_prefix = [0] * (item_count + 1)
+    blank_prefix = [0] * item_count
+    header_prefix = [0] * item_count
+    previous_category: str | None = None
+    for index, (item, extra) in enumerate(zip(items, extra_lines, strict=True)):
+        row_prefix[index + 1] = row_prefix[index] + 1 + extra
+        if index:
+            blank_prefix[index] = blank_prefix[index - 1]
+            header_prefix[index] = header_prefix[index - 1]
+            if item.category != previous_category:
+                blank_prefix[index] += 1
+                if item.category:
+                    header_prefix[index] += 1
+        previous_category = item.category
+
+    def _window_line_count(start: int, end: int) -> int:
+        """Return lines rendered by the window ``items[start:end]``."""
+        if start >= end:
+            return 0
+        return (
+            (1 if items[start].category else 0)
+            + row_prefix[end]
+            - row_prefix[start]
+            + blank_prefix[end - 1]
+            - blank_prefix[start]
+            + header_prefix[end - 1]
+            - header_prefix[start]
         )
-        if _completion_selected_render_line(candidate, width=width) < selected_line_limit:
-            break
+
+    def _selected_window_line(start: int) -> int:
+        """Return the line the selected item begins at inside ``items[start:]``."""
+        if start >= item_count:
+            return 0
+        if selected_index < item_count:
+            return (
+                (1 if items[start].category else 0)
+                + row_prefix[selected_index]
+                - row_prefix[start]
+                + header_prefix[selected_index]
+                - header_prefix[start]
+            )
+        # A selected index past the last item makes the original line walk run
+        # off the end of the candidate and report one line short of its count.
+        return (
+            (1 if items[start].category else 0)
+            + row_prefix[item_count]
+            - row_prefix[start]
+            - 1
+            + header_prefix[item_count - 1]
+            - header_prefix[start]
+        )
+
+    start = 0
+    while start < selected_index and _selected_window_line(start) >= selected_line_limit:
         start += 1
 
-    end = len(state.items)
-    while end > state.selected_index + 1:
-        candidate = CompletionState(
-            items=state.items[start:end],
-            selected_index=state.selected_index - start,
-        )
-        if _completion_render_line_count(candidate, width=width) <= max_lines:
-            break
+    end = item_count
+    while end > selected_index + 1 and _window_line_count(start, end) > max_lines:
         end -= 1
 
-    while start < state.selected_index:
-        candidate = CompletionState(
-            items=state.items[start:end],
-            selected_index=state.selected_index - start,
-        )
-        if _completion_render_line_count(candidate, width=width) <= max_lines:
-            break
+    while start < selected_index and _window_line_count(start, end) > max_lines:
         start += 1
 
     return CompletionState(
-        items=state.items[start:end],
-        selected_index=state.selected_index - start,
+        items=items[start:end],
+        selected_index=selected_index - start,
     )
 
 
@@ -6342,14 +6396,20 @@ def _completion_render_line_count(state: CompletionState, *, width: int | None =
     return line_count
 
 
-def _completion_item_extra_wrapped_lines(
-    item: CompletionItem,
-    *,
+@functools.lru_cache(maxsize=256)
+def _measure_completion_item_wrapped_lines(
+    display: str,
+    description: str,
+    category: str | None,
     width: int | None,
 ) -> int:
-    """Return extra rendered lines used when a completion description wraps."""
-    if width is None or width <= 0 or not item.description:
-        return 0
+    """Return the wrapped-line height of one completion item render.
+
+    The rendered output depends only on the command text, description, category
+    header, and console width, so memoizing on those scalars turns repeated
+    candidate-window renders into O(1) lookups. Width is part of the key so
+    resize events invalidate stale measurements. The cache is LRU-bounded.
+    """
     output = StringIO()
     console = Console(
         file=output,
@@ -6360,13 +6420,41 @@ def _completion_item_extra_wrapped_lines(
     )
     console.print(
         render_completion_suggestions(
-            CompletionState(items=(item,), selected_index=0),
+            CompletionState(
+                items=(
+                    CompletionItem(
+                        display=display,
+                        replacement="",
+                        start=0,
+                        end=0,
+                        description=description,
+                        category=category,
+                    ),
+                ),
+                selected_index=0,
+            ),
             theme=TAU_DARK_THEME,
         ),
         end="",
     )
     line_count = len(output.getvalue().splitlines())
     return max(line_count - 1, 0)
+
+
+def _completion_item_extra_wrapped_lines(
+    item: CompletionItem,
+    *,
+    width: int | None,
+) -> int:
+    """Return extra rendered lines used when a completion description wraps."""
+    if width is None or width <= 0 or not item.description:
+        return 0
+    return _measure_completion_item_wrapped_lines(
+        item.display,
+        item.description,
+        item.category,
+        width,
+    )
 
 
 def _session_command_registry(session: CodingSession) -> CommandRegistry:
