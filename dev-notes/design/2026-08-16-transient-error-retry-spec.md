@@ -18,9 +18,8 @@ error, the adapter SHALL mark the failure as retryable when:
   transient markers (for example overloaded, service unavailable, rate
   limit, internal/server error, timeout), including after partial content,
   or
-- the failure is an HTTP status the adapter considers transient (408, 409,
-  425, 429, or 5xx) whose adapter-internal retry budget was already
-  exhausted.
+- the failure carries a transient HTTP status (408, 409, 425, 429, or 5xx)
+  and the adapter's own retry attempts for that call were already exhausted.
 
 The adapter SHALL mark the failure as not retryable when it is a non-transient
 HTTP status, a terminal rate limit (usage or balance markers such as
@@ -124,7 +123,7 @@ retries the total attempt count is three.
 
 The backoff delay SHALL grow with each successive attempt until it reaches a
 fixed maximum cap and SHALL never exceed that cap; the first delay SHALL be a
-fixed base value.
+fixed base value, and the base value SHALL be smaller than the maximum cap.
 
 ##### Scenario: failure followed by success
 
@@ -201,12 +200,12 @@ retries.
 #### Requirement: Cancellation during retry
 
 When the run is cancelled during a retry backoff delay, the harness SHALL NOT
-reissue further attempts, SHALL surface the failure as a terminal error
-exactly as it does when the retry budget is exhausted (failed message appended
-and the run ended), SHALL write the terminal error entry in the diagnostics
-log, and SHALL emit no retry-start events after the cancellation. The mounted
-retry notice SHALL be replaced by that terminal error projection, and the
-failed attempt's discarded partial content SHALL NOT be restored.
+reissue further attempts, SHALL end the run with the same terminal error
+entry, message-append, and error projection semantics as when the retry budget
+is exhausted, and SHALL emit no retry-start events after the cancellation. The
+mounted retry notice SHALL be replaced by that terminal error projection. The
+failed attempt's partial content SHALL remain discarded: the appended failed
+message SHALL NOT retain it in history or storage.
 
 When the run is cancelled during a reattempt, the harness SHALL NOT reissue
 further attempts, SHALL append the in-flight attempt's message and end the run
@@ -219,10 +218,10 @@ projection today's cancelled-stream behavior produces.
 
 - GIVEN a retryable failure is waiting out its backoff delay
 - WHEN the user cancels the run
-- THEN no further attempts occur, the failure is surfaced as a terminal error
-  exactly as when the budget is exhausted, the transcript shows the terminal
-  error projection with no lingering retry notice, and the discarded partial
-  content is not restored.
+- THEN no further attempts occur, the run ends with the exhausted-budget
+  terminal semantics, the transcript shows the terminal error projection with
+  no lingering retry notice, and the failed message in history and storage
+  retains none of the discarded partial content.
 
 ##### Scenario: cancel during a reattempt
 
