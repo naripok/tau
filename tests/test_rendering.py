@@ -228,4 +228,5 @@ def test_transcript_renderer_prints_turn_retry_notice(capsys: pytest.CaptureFixt
 
     captured = capsys.readouterr()
     assert "retrying 2/3" in captured.err
-    assert "Error" not in captured.err
+    # No terminal error projection: the turn retried instead of failing.
+    assert "Error:" not in captured.err
