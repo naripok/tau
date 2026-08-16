@@ -175,7 +175,6 @@ from __future__ import annotations
 from tau_agent.retry import retry_delay_seconds, wait_for_retry  # noqa: F401
 from tau_agent.types import JSONValue
 from tau_ai._provider_events import ProviderRetryEvent
-from tau_ai.provider import CancellationToken
 
 
 def provider_retry_event(
@@ -621,7 +620,14 @@ async def test_harness_default_turn_retry_budget_is_two() -> None:
     assert config.max_turn_retries == DEFAULT_TURN_RETRIES
 ```
 
-> Note: `test_harness_default_turn_retry_budget_is_two` uses `FakeProvider([[]])` as a placeholder; if `AgentHarnessConfig` requires a usable provider, construct it with any `FakeProvider([[]])` — it is never called.
+> Note: `test_harness_default_turn_retry_budget_is_two` uses `FakeProvider([[]])` as a placeholder; if `AgentHarnessConfig` requires a usable provider, construct it with any `FakeProvider([[]])` — it is never called. `test_agent_harness.py` does not define `_collect`; add the same helper the other test files use:
+>
+> ```python
+> async def _collect(stream: AsyncIterator[AgentEvent]) -> list[AgentEvent]:
+>     return [event async for event in stream]
+> ```
+>
+> (with `AsyncIterator` from `collections.abc` and `AgentEvent` from `tau_agent` already imported).
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -643,7 +649,7 @@ class TurnRetryStartEvent(WireModel):
     error_type: str | None = None
 ```
 
-Add `TurnRetryStartEvent` to the `AgentEvent` union (alphabetical position within the Annotated union).
+Add `TurnRetryStartEvent` to the `AgentEvent` union next to the other turn events (`TurnStartEvent`/`TurnEndEvent`), following the existing lifecycle grouping.
 
 - [ ] **Step 5: Implement the retry loop** (`src/tau_agent/loop.py`)
 
@@ -1119,7 +1125,8 @@ async def test_openai_compatible_quota_429_is_not_retryable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(
-            429, json={"error": {"message": "You have insufficient quota."}}
+            429,
+            json={"error": {"code": "insufficient_quota", "message": "You have insufficient quota."}},
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -1767,15 +1774,11 @@ to:
                             ),
                         )
         if terminal_payload is not None:
-            for tool_event, end_event in (terminal_payload,):
-                for tool_call_event in tool_event:
-                    yield tool_call_event
-                yield end_event
+            for tool_call_event in terminal_payload[0]:
+                yield tool_call_event
+            yield terminal_payload[1]
         return
 ```
-
-> The `for tool_event, end_event in (terminal_payload,):` unpacking is unusual;
-> replace it with the plain form: `for tool_call_event in terminal_payload[0]: yield tool_call_event` then `yield terminal_payload[1]`. Keep the code simple.
 
 5. Replace the `except httpx.HTTPError` branch:
 
@@ -2084,7 +2087,7 @@ def _classify_stream_error(event: ProviderErrorEvent) -> ProviderErrorEvent:
 `_stream_error_details` already exist in this module.)
 
 
-3. Replace the transport `except httpx.HTTPError` branch:
+4. Replace the transport `except httpx.HTTPError` branch:
 
 ```python
                 except httpx.HTTPError as exc:
@@ -2242,7 +2245,7 @@ async def test_google_tail_read_completes_with_diagnostic() -> None:
     )
 ```
 
-For mistral, the real classes are `MistralConversationsProvider`/`OpenAICompatibleConfig` (the adapter appends `/v1` to the base URL itself). There are NO existing mistral tests in the suite — the SSE shape is the same chat-completions contract as the openai-compatible parser (`choices[].delta.content` chunks plus a `data: [DONE]` terminator), which is exactly what `_MistralStreamParser.feed` consumes. Use this test:
+For mistral, the real classes are `MistralConversationsProvider`/`OpenAICompatibleConfig` (the adapter appends `/v1` to the base URL itself). There are NO existing mistral tests in the suite, so `MistralConversationsProvider` is not yet imported in `test_tau_ai.py` — add it to the `tau_ai` imports at the top of the file alongside the other providers (the file already imports `GoogleGenerativeAIProvider` the same way). The SSE shape is the same chat-completions contract as the openai-compatible parser (`choices[].delta.content` chunks plus a `data: [DONE]` terminator), which is exactly what `_MistralStreamParser.feed` consumes. Use this test:
 
 ```python
 @pytest.mark.anyio
@@ -2290,7 +2293,7 @@ async def test_mistral_marks_mid_stream_drop_retryable() -> None:
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/test_tau_ai.py -k "google or mistral" -v`
-Expected: FAIL — `retryable` assertions fail on the drop tests; tail test shows an error end.
+Expected: FAIL — first an ImportError for the newly referenced provider classes if the imports were not added, then `retryable` assertion failures on the drop tests and an error end on the tail test.
 
 - [ ] **Step 3: Implement `src/tau_ai/google.py`**
 
@@ -2709,7 +2712,7 @@ def _validate_provider_numbers(
 7. Make `turn_retry_max` survive the settings round-trip, mirroring exactly how `max_retries` travels:
    - `_provider_preference_to_json` (line ~1053): add `"turn_retry_max": provider.turn_retry_max,` next to `"max_retries"`.
    - `_apply_provider_preference` (line ~1251): when `"turn_retry_max" in value`, parse it with `_non_negative_int(value.get("turn_retry_max"), f"provider_preferences.{provider.name}.turn_retry_max")`, and pass `turn_retry_max=turn_retry_max` into both `replace(...)` constructions in the function.
-   - `_provider_from_json` (line ~1940): read `turn_retry_max = _non_negative_int(data.get("turn_retry_max", DEFAULT_TURN_RETRIES), f"providers[{name}].turn_retry_max")` and pass it into every provider-config construction branch (anthropic, openai-codex, openai-compatible, google-generative-ai, mistral-conversations).
+   - `_provider_from_json` (line ~1940): read `turn_retry_max = _non_negative_int(data.get("turn_retry_max", DEFAULT_TURN_RETRIES), f"providers[{name}].turn_retry_max")` and pass it into all three provider-config construction branches (anthropic, openai-codex, and the shared openai-compatible construction that also serves google-generative-ai and mistral-conversations).
    Without these, `load_provider_settings` silently drops the budget back to the default and the setup round-trip test fails.
 
 - [ ] **Step 4: Wire the harness budget in the session** (`src/tau_coding/session.py`)
@@ -3009,6 +3012,7 @@ Add the methods:
         notice_widget = TranscriptMessageWidget(
             ChatItem(role="status", text=notice),
             theme=self._render_theme,
+            show_tool_results=False,
         )
         self._retry_notice_widget = notice_widget
         await self.mount(notice_widget, before=self._bottom_boundary)
