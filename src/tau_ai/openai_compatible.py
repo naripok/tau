@@ -40,6 +40,12 @@ from tau_ai._provider_events import (
     ProviderThinkingDeltaEvent,
     ProviderToolCallEvent,
 )
+from tau_ai.classify import (
+    is_context_overflow,
+    is_retryable_http_failure,
+    is_terminal_rate_limit,
+    is_transient_status,
+)
 from tau_ai.content import (
     NON_VISION_TOOL_IMAGE_PLACEHOLDER,
     NON_VISION_USER_IMAGE_PLACEHOLDER,
@@ -53,7 +59,7 @@ from tau_ai.http_errors import provider_http_error_message
 from tau_ai.openai_cache import is_direct_openai_url, openai_prompt_cache_key
 from tau_ai.provider import CancellationToken
 from tau_ai.retry import provider_retry_event, retry_delay_seconds, wait_for_retry
-from tau_ai.stream import canonicalize_provider_stream
+from tau_ai.stream import attach_tail_read_diagnostic, canonicalize_provider_stream
 from tau_ai.tool_call_ids import portable_tool_call_id
 
 # Models that reject function tools + reasoning_effort on /chat/completions and
@@ -265,6 +271,7 @@ class OpenAICompatibleProvider:
             attempt = 0
             while True:
                 parser = parser_factory()
+                final_events: list[ProviderEvent] | None = None
                 try:
                     async with client.stream(
                         "POST", request_url, json=payload, headers=headers
@@ -276,7 +283,11 @@ class OpenAICompatibleProvider:
                         if response.status_code >= 400:
                             body = await response.aread()
                             body_text = body.decode(errors="replace")
-                            if self._should_retry(attempt, status_code=response.status_code):
+                            if self._should_retry(
+                                attempt,
+                                status_code=response.status_code,
+                                body=body_text,
+                            ):
                                 delay = retry_delay_seconds(
                                     attempt,
                                     max_delay_seconds=self._config.max_retry_delay_seconds,
@@ -307,6 +318,9 @@ class OpenAICompatibleProvider:
                                     "body": body_text,
                                     "attempts": attempt + 1,
                                 },
+                                retryable=is_retryable_http_failure(
+                                    response.status_code, body_text
+                                ),
                                 response_provider=response_provider,
                             )
                             return
@@ -342,10 +356,18 @@ class OpenAICompatibleProvider:
                                 # completion must never depend on metadata hooks.
                                 with suppress(Exception):
                                     _append_response_observer_diagnostic(final_events, exc)
-                        for parser_event in final_events:
+                except httpx.HTTPError as exc:
+                    if final_events is not None:
+                        # Every chunk was parsed and finalized before the tail
+                        # read failed: the response is complete.
+                        for index, parser_event in enumerate(final_events):
+                            if (
+                                index == len(final_events) - 1
+                                and isinstance(parser_event, ProviderResponseEndEvent)
+                            ):
+                                parser_event = attach_tail_read_diagnostic(parser_event, exc)
                             yield parser_event
                         return
-                except httpx.HTTPError as exc:
                     if not parser.emitted_content and self._should_retry(attempt):
                         delay = retry_delay_seconds(
                             attempt,
@@ -367,9 +389,20 @@ class OpenAICompatibleProvider:
                         continue
                     yield ProviderErrorEvent(
                         message=str(exc),
-                        data={"attempts": attempt + 1},
+                        data={
+                            "attempts": attempt + 1,
+                            "error_type": type(exc).__name__,
+                        },
+                        retryable=True,
                     )
                     return
+                # The response body ended cleanly; a transport error from here
+                # on is a trailing-read failure after a complete response and
+                # must not fail the run.
+                if final_events is not None:
+                    for parser_event in final_events:
+                        yield parser_event
+                return
 
         return iterator()
 
@@ -395,10 +428,18 @@ class OpenAICompatibleProvider:
             self._client = create_async_client(timeout=self._config.timeout_seconds)
         return self._client
 
-    def _should_retry(self, attempt: int, *, status_code: int | None = None) -> bool:
+    def _should_retry(
+        self, attempt: int, *, status_code: int | None = None, body: str = ""
+    ) -> bool:
         if attempt >= self._config.max_retries:
             return False
-        return status_code is None or _is_transient_status(status_code)
+        if status_code is None:
+            return True
+        return (
+            is_transient_status(status_code)
+            and not is_terminal_rate_limit(body)
+            and not is_context_overflow(body)
+        )
 
 
 def _response_header_value(response: httpx.Response, header_name: str | None) -> str | None:
@@ -1360,5 +1401,4 @@ def _thinking_delta(delta: Mapping[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def _is_transient_status(status_code: int) -> bool:
-    return status_code in {408, 409, 425, 429} or status_code >= 500
+

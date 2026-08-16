@@ -3563,3 +3563,166 @@ def test_classify_context_overflow_markers() -> None:
     assert is_context_overflow("This model's maximum context length was exceeded.") is True
     assert is_context_overflow("token limit exceeded") is True
     assert is_context_overflow("servers overloaded") is False
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_marks_mid_stream_drop_retryable() -> None:
+    """Prove a transport drop after partial output is classified retryable."""
+    requests: list[httpx.Request] = []
+
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+            raise httpx.ReadError("stream dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=FailingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+    assert events[-1].error.text == "partial"
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_exhausted_transient_status_is_retryable() -> None:
+    """Prove a transient status that exhausted the adapter budget stays retryable."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(503, text="try later")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 3
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_quota_429_is_not_retryable() -> None:
+    """Prove a terminal rate-limit body overrides the transient 429 status."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            429,
+            json={"error": {"code": "insufficient_quota", "message": "You have insufficient quota."}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is False
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_tail_read_completes_with_diagnostic() -> None:
+    """Prove a drop after the final chunk completes the message with a note."""
+    requests: list[httpx.Request] = []
+
+    class TailDroppingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            body = (
+                b'data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}\n\n'
+                b"data: [DONE]\n\n"
+            )
+            yield body
+
+        async def aclose(self) -> None:
+            raise httpx.ReadError("tail dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=TailDroppingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert events[-1].type == "done"
+    message = events[-1].message
+    assert message.text == "done"
+    assert message.stop_reason == "stop"
+    assert any(
+        diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
+    )
