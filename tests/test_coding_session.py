@@ -5071,3 +5071,14 @@ def test_minimal_commands_are_handled(tmp_path: Path) -> None:
     assert session.handle_command("/quit").exit_requested is True
     assert session.handle_command("/exit").exit_requested is True
     assert session.handle_command("/unknown").handled is False
+
+
+async def test_context_overflow_markers_shared_with_adapters(tmp_path: Path) -> None:
+    """Prove the overflow detection the session compacts on still matches providers."""
+    from tau_coding.session import is_context_overflow_error
+
+    message = AssistantMessage(
+        stop_reason="error",
+        error_message="This model's maximum context length was exceeded.",
+    )
+    assert is_context_overflow_error(message) is True

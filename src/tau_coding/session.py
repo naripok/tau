@@ -40,6 +40,7 @@ from tau_agent.session.tree import SessionTreeError, path_to_entry
 from tau_agent.tool_history import ToolHistoryRepair, repair_tool_history
 from tau_agent.tools import AgentTool
 from tau_agent.types import JSONValue
+from tau_ai.classify import is_context_overflow
 from tau_ai.model_limits import ModelLimitsProvider, RuntimeModelLimits
 from tau_coding.branch_summary import summarize_branch_messages_with_model
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
@@ -2694,23 +2695,7 @@ def _next_user_message_index(
 
 def is_context_overflow_error(message: AssistantMessage) -> bool:
     """Return True when an assistant error looks like a context overflow."""
-    text = message.error_message or ""
-    normalized = text.lower()
-    markers = (
-        "context length",
-        "context window",
-        "context limit",
-        "maximum context",
-        "max context",
-        "input is too long",
-        "input length",
-        "prompt is too long",
-        "too many tokens",
-        "token limit",
-        "exceeds the limit",
-        "exceeded the limit",
-    )
-    return any(marker in normalized for marker in markers)
+    return is_context_overflow(message.error_message or "")
 
 
 def _detach_missing_parents(entries: list[SessionEntry]) -> list[SessionEntry]:

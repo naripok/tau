@@ -38,6 +38,11 @@ from tau_ai import (
     openai_compatible_config_from_env,
 )
 from tau_ai._provider_events import ProviderEvent
+from tau_ai.classify import (
+    is_context_overflow,
+    is_retryable_http_failure,
+    is_transient_status,
+)
 
 
 async def _collect(stream: AsyncIterator[object]) -> list[object]:
@@ -3532,3 +3537,29 @@ async def test_canonicalize_defaults_retryable_to_false() -> None:
 
     assert isinstance(events[-1], AssistantErrorEvent)
     assert events[-1].retryable is False
+
+
+def test_classify_transient_statuses() -> None:
+    """Prove the transient HTTP status set is what the adapters retry on."""
+    assert is_transient_status(408) is True
+    assert is_transient_status(429) is True
+    assert is_transient_status(503) is True
+    assert is_transient_status(400) is False
+    assert is_transient_status(401) is False
+
+
+def test_classify_terminal_markers_override_transient_status() -> None:
+    """Prove usage limits and overflow markers make an exhausted failure terminal."""
+    assert is_retryable_http_failure(503, "try later") is True
+    assert is_retryable_http_failure(429, "insufficient_quota") is False
+    assert is_retryable_http_failure(429, "monthly usage limit reached") is False
+    assert is_retryable_http_failure(429, "quota exceeded for this model") is False
+    assert is_retryable_http_failure(429, "maximum context length exceeded") is False
+    assert is_retryable_http_failure(400, "bad request") is False
+
+
+def test_classify_context_overflow_markers() -> None:
+    """Prove the shared overflow markers cover the session's existing vocabulary."""
+    assert is_context_overflow("This model's maximum context length was exceeded.") is True
+    assert is_context_overflow("token limit exceeded") is True
+    assert is_context_overflow("servers overloaded") is False
