@@ -199,7 +199,7 @@ async def canonicalize_provider_stream(
             error.diagnostics = [
                 AssistantMessageDiagnostic(type="provider_error", details=event.data)
             ]
-            yield AssistantErrorEvent(reason="error", error=error)
+            yield AssistantErrorEvent(reason="error", error=error, retryable=event.retryable)
             terminal = True
 
     if not started:

@@ -37,6 +37,7 @@ from tau_ai import (
     ToolCallEndEvent,
     openai_compatible_config_from_env,
 )
+from tau_ai._provider_events import ProviderEvent
 
 
 async def _collect(stream: AsyncIterator[object]) -> list[object]:
@@ -3471,3 +3472,63 @@ async def test_github_copilot_anthropic_sends_vision_header() -> None:
         )
 
     assert requests[0].headers["Copilot-Vision-Request"] == "true"
+
+
+async def _async_events(
+    events: list[ProviderEvent],
+) -> AsyncIterator[ProviderEvent]:
+    """Yield provider events one at a time for canonicalize tests."""
+    for event in events:
+        yield event
+
+
+@pytest.mark.anyio
+async def test_canonicalize_forwards_retryable_error_flag() -> None:
+    """Prove the adapter's retryable classification reaches the agent layer."""
+    from tau_agent.provider_events import AssistantErrorEvent
+    from tau_ai._provider_events import ProviderErrorEvent
+    from tau_ai.stream import canonicalize_provider_stream
+
+    events = [
+        event
+        async for event in canonicalize_provider_stream(
+            _async_events(
+                [
+                    ProviderErrorEvent(
+                        message="peer closed connection",
+                        data={"attempts": 1, "error_type": "RemoteProtocolError"},
+                        retryable=True,
+                    )
+                ]
+            ),
+            api="openai-completions",
+            provider="openai",
+            model="test-model",
+        )
+    ]
+
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+
+
+@pytest.mark.anyio
+async def test_canonicalize_defaults_retryable_to_false() -> None:
+    """Prove non-classified failures are never retried at the harness level."""
+    from tau_agent.provider_events import AssistantErrorEvent
+    from tau_ai._provider_events import ProviderErrorEvent
+    from tau_ai.stream import canonicalize_provider_stream
+
+    events = [
+        event
+        async for event in canonicalize_provider_stream(
+            _async_events(
+                [ProviderErrorEvent(message="invalid api key", data={"attempts": 1})]
+            ),
+            api="openai-completions",
+            provider="openai",
+            model="test-model",
+        )
+    ]
+
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is False

@@ -54,7 +54,15 @@ def assistant_done(
     return AssistantDoneEvent(reason=reason, message=final)
 
 
-def assistant_error(message: str, data: object = None) -> AssistantErrorEvent:
+def assistant_error(
+    message: str, data: object = None, *, retryable: bool = False
+) -> AssistantErrorEvent:
     del data
     error = AssistantMessage(stop_reason="error", error_message=message)
-    return AssistantErrorEvent(reason="error", error=error)
+    return AssistantErrorEvent(reason="error", error=error, retryable=retryable)
+
+
+def retryable_error(message: str, *, partial: str = "") -> AssistantErrorEvent:
+    """A transient provider failure whose partial output is safe to discard."""
+    error = AssistantMessage(stop_reason="error", error_message=message, content=partial)
+    return AssistantErrorEvent(reason="error", error=error, retryable=True)

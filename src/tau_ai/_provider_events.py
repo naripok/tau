@@ -80,6 +80,7 @@ class ProviderErrorEvent(BaseModel):
     message: str
     data: dict[str, JSONValue] | None = None
     response_provider: str | None = None
+    retryable: bool = False
 
 
 type ProviderEvent = (
