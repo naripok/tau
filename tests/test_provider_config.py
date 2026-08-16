@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 import tau_coding.provider_config as provider_config
+from tau_agent.harness import DEFAULT_TURN_RETRIES
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
 from tau_coding.paths import TauPaths
 from tau_coding.provider_catalog import ModelCostTier
@@ -1808,3 +1809,21 @@ def test_openai_compatible_provider_config_rejects_invalid_retries() -> None:
         OpenAICompatibleProviderConfig(name="local", max_retries=-1)
     with pytest.raises(ProviderConfigError, match="0 or greater"):
         OpenAICompatibleProviderConfig(name="local", max_retry_delay_seconds=-1)
+
+
+def test_provider_config_turn_retry_max_defaults_to_two() -> None:
+    """Prove the per-provider turn-retry budget defaults to the spec default."""
+    assert OpenAICompatibleProviderConfig(name="test").turn_retry_max == DEFAULT_TURN_RETRIES
+
+
+def test_provider_config_rejects_negative_turn_retry_max() -> None:
+    """Prove a negative turn-retry budget is rejected at validation."""
+    with pytest.raises(ProviderConfigError):
+        OpenAICompatibleProviderConfig(name="test", turn_retry_max=-1)
+
+
+def test_provider_config_serializes_turn_retry_max() -> None:
+    """Prove the turn-retry budget round-trips through the settings JSON shape."""
+    provider = OpenAICompatibleProviderConfig(name="test", turn_retry_max=4)
+
+    assert provider.to_json()["turn_retry_max"] == 4

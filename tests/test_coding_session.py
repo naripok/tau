@@ -5211,3 +5211,113 @@ async def test_auto_naming_failure_is_never_turn_retried(tmp_path: Path) -> None
         if "retry" in line
     ]
     assert all(entry["kind"] != "assistant_retry" for entry in entries)
+
+
+@pytest.mark.anyio
+async def test_session_uses_provider_turn_retry_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Prove the session harness honors the active provider's retry budget."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    recovered = AssistantMessage(content="recovered", model="fake")
+    runtime = FakeProvider(
+        [
+            [assistant_start(), retryable_error("drop")],
+            [assistant_start(), retryable_error("drop again")],
+            [assistant_start(), assistant_done(recovered)],
+        ]
+    )
+    _install_runtime_provider_stub(monkeypatch, runtime)
+
+    runtime_config = OpenAICompatibleProviderConfig(
+        name="test",
+        models=("fake",),
+        turn_retry_max=2,
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=runtime,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            runtime_provider_config=runtime_config,
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    assert len(runtime.calls) == 3
+    assert session.messages[-1].text == "recovered"
+
+
+@pytest.mark.anyio
+async def test_session_zero_turn_retry_budget_disables_retries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Prove a provider with a zero budget ends immediately on a retryable error."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    runtime = FakeProvider(
+        [
+            [assistant_start(), retryable_error("drop")],
+            [assistant_start(), assistant_done(AssistantMessage(content="never", model="fake"))],
+        ]
+    )
+    _install_runtime_provider_stub(monkeypatch, runtime)
+
+    runtime_config = OpenAICompatibleProviderConfig(
+        name="test",
+        models=("fake",),
+        turn_retry_max=0,
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=runtime,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            runtime_provider_config=runtime_config,
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    assert len(runtime.calls) == 1
+
+
+def _install_runtime_provider_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: FakeProvider,
+) -> None:
+    """Route the session's runtime-provider activation to a scripted fake."""
+    create_provider: object
+
+    def create_provider(
+        provider_config: object,
+        *,
+        credential_store: FileCredentialStore | None = None,
+        model: str | None = None,
+        thinking_level: str | None = None,
+        inference_provider: str | None = None,
+        response_headers_observer: object | None = None,
+    ) -> FakeProvider:
+        del (
+            provider_config,
+            credential_store,
+            model,
+            thinking_level,
+            inference_provider,
+            response_headers_observer,
+        )
+        return runtime
+
+    monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)

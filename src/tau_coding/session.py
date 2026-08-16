@@ -16,7 +16,12 @@ from tau_agent.events import (
     ToolExecutionEndEvent,
     TurnRetryStartEvent,
 )
-from tau_agent.harness import AgentHarness, AgentHarnessConfig, QueuedMessages
+from tau_agent.harness import (
+    DEFAULT_TURN_RETRIES,
+    AgentHarness,
+    AgentHarnessConfig,
+    QueuedMessages,
+)
 from tau_agent.messages import (
     AgentMessage,
     AssistantMessage,
@@ -498,6 +503,11 @@ class CodingSession:
                 system=system,
                 tools=tools,
                 session_id=config.session_id,
+                max_turn_retries=(
+                    config.runtime_provider_config.turn_retry_max
+                    if config.runtime_provider_config is not None
+                    else DEFAULT_TURN_RETRIES
+                ),
             ),
             messages=state.messages,
         )
@@ -1229,6 +1239,7 @@ class CodingSession:
             raise ProviderConfigError(str(exc)) from exc
         self._owned_providers.append(provider)
         self._harness.config.provider = provider
+        self._harness.config.max_turn_retries = provider_config.turn_retry_max
         self._provider_name = provider_config.name
         self._inference_provider = _configured_inference_provider(provider_config, model)
         self._runtime_provider_config = provider_config
@@ -1411,6 +1422,7 @@ class CodingSession:
         provider_config: ProviderConfig,
     ) -> None:
         self._harness.config.provider = provider
+        self._harness.config.max_turn_retries = provider_config.turn_retry_max
         self._runtime_provider_config = provider_config
         self._invalidate_runtime_model_limits()
 
