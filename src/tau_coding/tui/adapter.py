@@ -9,6 +9,7 @@ from tau_agent.events import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
+    TurnRetryStartEvent,
 )
 from tau_agent.messages import AssistantMessage, CustomMessage, ToolCall, UserMessage
 from tau_ai.events import TextDeltaEvent, ThinkingDeltaEvent
@@ -21,13 +22,14 @@ from tau_coding.events import (
     SessionAgentEndEvent,
 )
 from tau_coding.session import is_context_overflow_error
-from tau_coding.tui.state import TuiState
+from tau_coding.tui.state import TuiState, format_retry_notice
 
 
 class TuiEventAdapter:
     def __init__(self, state: TuiState) -> None:
         self.state = state
         self._assistant_start_item_index: int | None = None
+        self._retry_notice_index: int | None = None
         self._pending_overflow_error: AssistantMessage | None = None
         self._tool_batch_ids: dict[str, int] = {}
 
@@ -55,8 +57,22 @@ class TuiEventAdapter:
         if isinstance(event, QueueUpdateEvent):
             self.state.update_queue(steering=event.steering, follow_up=event.follow_up)
             return
+        if isinstance(event, TurnRetryStartEvent):
+            start = self._assistant_start_item_index
+            if start is not None:
+                del self.state.items[start:]
+            self.state.assistant_buffer = ""
+            self._assistant_start_item_index = None
+            self._discard_retry_notice()
+            self.state.add_item(
+                "status",
+                format_retry_notice(event.attempt, event.max_attempts, event.reason),
+            )
+            self._retry_notice_index = len(self.state.items) - 1
+            return
         if isinstance(event, MessageStartEvent):
             if isinstance(event.message, AssistantMessage):
+                self._discard_retry_notice()
                 self.state.assistant_buffer = event.message.text
                 self._assistant_start_item_index = len(self.state.items)
             return
@@ -80,6 +96,7 @@ class TuiEventAdapter:
             elif isinstance(message, AssistantMessage):
                 # Replace provisional delta rows with the final canonical
                 # message so persisted block boundaries and ordering win.
+                self._discard_retry_notice()
                 start = self._assistant_start_item_index
                 if start is not None:
                     del self.state.items[start:]
@@ -139,6 +156,13 @@ class TuiEventAdapter:
             return
         if isinstance(event, AutoRetryStartEvent):
             self.state.add_item("status", f"… {event.error_message}")
+
+    def _discard_retry_notice(self) -> None:
+        """Drop the pending retry notice from the canonical display state."""
+        index = self._retry_notice_index
+        self._retry_notice_index = None
+        if index is not None and 0 <= index < len(self.state.items):
+            del self.state.items[index]
 
     def _flush(self) -> None:
         if self.state.assistant_buffer:

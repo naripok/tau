@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pi_event_helpers import text_delta
 from tau_agent import (
     AgentEndEvent,
     AgentStartEvent,
@@ -15,6 +16,7 @@ from tau_agent import (
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
     ToolResultMessage,
+    TurnRetryStartEvent,
     UserMessage,
 )
 from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
@@ -677,3 +679,58 @@ def test_tui_adapter_uses_canonical_result_details_for_patch() -> None:
     )
 
     assert "Patch:\n--- a.py\n+++ a.py" in (state.items[0].tool_result_text or "")
+
+
+def test_adapter_rolls_back_partial_assistant_on_retry_start() -> None:
+    """Prove the retry notice replaces the failed attempt's partial state."""
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(
+        MessageUpdateEvent(
+            message=AssistantMessage(content="partial"),
+            assistant_message_event=text_delta("partial"),
+        )
+    )
+
+    adapter.apply(
+        TurnRetryStartEvent(
+            attempt=2,
+            max_attempts=3,
+            delay_seconds=0.25,
+            reason="network error (RemoteProtocolError)",
+            error_message="peer closed connection",
+        )
+    )
+
+    assert state.assistant_buffer == ""
+    assert all(item.role != "assistant" for item in state.items)
+    assert state.items[-1].role == "status"
+    assert "2/3" in state.items[-1].text
+
+
+def test_adapter_discards_retry_notice_when_reattempt_starts() -> None:
+    """Prove the notice leaves the state once the reattempt starts streaming."""
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(
+        MessageUpdateEvent(
+            message=AssistantMessage(content="partial"),
+            assistant_message_event=text_delta("partial"),
+        )
+    )
+    adapter.apply(
+        TurnRetryStartEvent(
+            attempt=2,
+            max_attempts=3,
+            delay_seconds=0.25,
+            reason="network error",
+            error_message="peer closed connection",
+        )
+    )
+
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+
+    assert all(item.role != "status" for item in state.items)
+    assert state.assistant_buffer == ""

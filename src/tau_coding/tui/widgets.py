@@ -704,6 +704,7 @@ class TranscriptView(VerticalScroll):
         self._active_thinking_widget: StreamingTranscriptMessageWidget | None = None
         self._active_message_widgets: list[Widget] = []
         self._hidden_thinking_placeholder_visible = False
+        self._retry_notice_widget: TranscriptMessageWidget | None = None
         self._follow_output = True
         self._follow_scroll_pending = False
         self._window_start = 0
@@ -1169,6 +1170,7 @@ class TranscriptView(VerticalScroll):
         scroll_end: bool = False,
     ) -> StreamingTranscriptMessageWidget:
         """Create the active assistant message widget if needed."""
+        self._clear_retry_notice()
         if self._active_assistant_widget is not None:
             return self._active_assistant_widget
         await self._finalize_active_thinking_message()
@@ -1210,6 +1212,7 @@ class TranscriptView(VerticalScroll):
         scroll_end: bool = False,
     ) -> None:
         """Append streamed thinking text or one hidden-thinking placeholder."""
+        self._clear_retry_notice()
         state = self._render_state
         if state is not None:
             # The adapter adds provisional thinking items before this method runs.
@@ -1262,6 +1265,7 @@ class TranscriptView(VerticalScroll):
         item: ChatItem | None = None,
     ) -> None:
         """Finalize the active assistant widget after the provider sends the full message."""
+        self._clear_retry_notice()
         widget = self._active_assistant_widget
         if widget is None:
             if item is not None:
@@ -1282,6 +1286,35 @@ class TranscriptView(VerticalScroll):
         ]
         self._hidden_thinking_placeholder_visible = False
 
+    def _clear_retry_notice(self) -> None:
+        """Remove the pending retry notice widget when the notice is consumed."""
+        widget = self._retry_notice_widget
+        self._retry_notice_widget = None
+        if widget is not None and widget.parent is self:
+            widget.remove()
+
+    async def discard_active_assistant(self, notice: str) -> None:
+        """Roll back the in-flight assistant widgets and show a retry notice."""
+        for widget in tuple(self._active_message_widgets):
+            if widget.parent is self:
+                await widget.remove()
+        self._active_message_widgets.clear()
+        self._active_assistant_widget = None
+        self._active_thinking_widget = None
+        self._hidden_thinking_placeholder_visible = False
+        self._clear_retry_notice()
+        state = self._render_state
+        if state is not None:
+            self._window_end = len(state.items)
+        notice_widget = TranscriptMessageWidget(
+            ChatItem(role="status", text=notice),
+            theme=self._render_theme,
+            show_tool_results=False,
+        )
+        self._retry_notice_widget = notice_widget
+        await self.mount(notice_widget, before=self._bottom_boundary)
+        self._request_follow_scroll(force=True)
+
     async def finish_structured_assistant_message(
         self,
         items: Sequence[ChatItem],
@@ -1290,6 +1323,7 @@ class TranscriptView(VerticalScroll):
         show_thinking: bool,
     ) -> None:
         """Replace only the provisional assistant tail with canonical ordered blocks."""
+        self._clear_retry_notice()
         should_follow = self._should_follow_output
         for widget in tuple(self._active_message_widgets):
             if widget.parent is self:

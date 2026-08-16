@@ -847,3 +847,8 @@ def _preview_text(text: str, *, max_lines: int) -> str:
             details.append("additional text")
         preview = f"{preview}\n\n[Preview only: {', '.join(details)} hidden from the TUI.]"
     return preview
+
+
+def format_retry_notice(attempt: int, max_attempts: int, reason: str) -> str:
+    """Return the transient notice text shown while a turn retry is pending."""
+    return f"… Connection lost — retrying {attempt}/{max_attempts}: {reason}"

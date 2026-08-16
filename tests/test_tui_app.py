@@ -38,6 +38,7 @@ from tau_agent import (
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
     ToolResultMessage,
+    TurnRetryStartEvent,
     UserMessage,
 )
 from tau_agent.messages import assistant_content
@@ -10134,3 +10135,104 @@ async def test_tui_login_provider_search_autofocus() -> None:
 
         search = app.screen.query_one("#login-provider-search", Input)
         assert search.has_focus, "Search input failed to automatically gain focus on screen mount."
+
+
+@pytest.mark.anyio
+async def test_prompt_worker_rolls_back_partial_text_on_turn_retry() -> None:
+    """Prove a retried turn shows only the reattempt's content in the transcript."""
+    partial = AssistantMessage()
+    recovered = AssistantMessage(content="recovered")
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="partial", partial=partial
+                ),
+            ),
+            TurnRetryStartEvent(
+                attempt=2,
+                max_attempts=3,
+                delay_seconds=0.25,
+                reason="network error (RemoteProtocolError)",
+                error_message="peer closed connection",
+            ),
+            MessageStartEvent(message=recovered),
+            MessageUpdateEvent(
+                message=recovered,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="recovered", partial=recovered
+                ),
+            ),
+            MessageEndEvent(message=recovered),
+            AgentEndEvent(),
+        ]
+    )
+    app = TauTuiApp(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", TranscriptView)
+        text = "\n".join(line.text for line in transcript.lines)
+
+    assert "partial" not in text
+    assert "recovered" in text
+    assert "Error" not in text
+    assert "retrying 2/3" not in text
+
+
+@pytest.mark.anyio
+async def test_prompt_worker_shows_only_final_attempt_on_exhausted_retries() -> None:
+    """Prove exhausted retries show one error projection and no earlier attempts."""
+    partial_one = AssistantMessage()
+    partial_two = AssistantMessage()
+    failed = AssistantMessage(
+        stop_reason="error",
+        error_message="drop 2",
+        content="partial-two",
+    )
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=partial_one),
+            MessageUpdateEvent(
+                message=partial_one,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="partial-one", partial=partial_one
+                ),
+            ),
+            TurnRetryStartEvent(
+                attempt=2,
+                max_attempts=3,
+                delay_seconds=0.25,
+                reason="network error",
+                error_message="drop 1",
+            ),
+            MessageStartEvent(message=partial_two),
+            MessageUpdateEvent(
+                message=partial_two,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="partial-two", partial=partial_two
+                ),
+            ),
+            MessageEndEvent(message=failed),
+            AgentEndEvent(),
+        ]
+    )
+    app = TauTuiApp(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", TranscriptView)
+        text = "\n".join(line.text for line in transcript.lines)
+
+    assert "partial-one" not in text
+    assert "partial-two" in text
+    assert "Error: drop 2" in text
+    assert "retrying" not in text

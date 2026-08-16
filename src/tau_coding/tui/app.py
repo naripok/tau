@@ -49,6 +49,7 @@ from tau_agent.events import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
+    TurnRetryStartEvent,
 )
 from tau_agent.messages import (
     AgentMessage,
@@ -156,7 +157,11 @@ from tau_coding.tui.config import (
 )
 from tau_coding.tui.file_drop import normalize_dropped_paths
 from tau_coding.tui.project_trust import ProjectTrustScreen, prompt_project_trust
-from tau_coding.tui.state import TuiState, format_terminal_command_result_block
+from tau_coding.tui.state import (
+    TuiState,
+    format_retry_notice,
+    format_terminal_command_result_block,
+)
 from tau_coding.tui.terminal_notification import TerminalNotificationController
 from tau_coding.tui.terminal_title import TerminalTitleController
 from tau_coding.tui.themes import (
@@ -4998,6 +5003,11 @@ class TauTuiApp(App[None]):
                     invocation=self.state.resolve_tool_invocation(updated_item, expanded=expanded),
                     result_markup=self.state.resolve_tool_result(updated_item, expanded=expanded),
                 )
+            self._refresh_chrome()
+            return
+        if isinstance(event, TurnRetryStartEvent):
+            notice = format_retry_notice(event.attempt, event.max_attempts, event.reason)
+            await transcript.discard_active_assistant(notice)
             self._refresh_chrome()
             return
         if isinstance(event, (AutoRetryStartEvent, CompactionStartEvent)):
