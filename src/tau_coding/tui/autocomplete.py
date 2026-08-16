@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,28 @@ IGNORED_FILE_COMPLETION_DIRS = frozenset(
     }
 )
 MAX_FILE_COMPLETIONS = 50
+# While a user is typing ``@...`` references, re-scanning the workspace on every
+# keystroke is wasteful for large repositories. Entries are reused within this
+# TTL window and invalidated at interaction boundaries via
+# ``clear_file_completion_index``.
+FILE_COMPLETION_INDEX_TTL = 3.0
+# Cap on distinct cached working directories so a pathological number of cwds
+# cannot grow the registry without bound; stale entries are evicted on miss.
+_MAX_FILE_COMPLETION_INDEX_ENTRIES = 8
+
+
+@dataclass(frozen=True, slots=True)
+class FileCompletionIndex:
+    """A cached scan of the file-reference completion paths for one cwd."""
+
+    cwd: Path
+    paths: tuple[Path, ...]
+    created_at: float
+
+
+# Registry of cached scans keyed by resolved cwd; a plain dict preserves
+# insertion order, which ``_evict_stale_file_completion_index_entry`` relies on.
+_file_completion_index: dict[Path, FileCompletionIndex] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +277,51 @@ def _active_file_reference_token(text: str) -> tuple[int, int] | None:
     return at_index, cursor
 
 
+def clear_file_completion_index() -> None:
+    """Clear the cached file-completion index.
+
+    This is an interaction boundary helper: call it when an interaction ends
+    (for example a prompt is submitted or the working directory changes) so the
+    next interaction re-scans the workspace instead of reusing stale paths.
+    """
+    _file_completion_index.clear()
+
+
 def _iter_file_reference_paths(cwd: Path) -> tuple[Path, ...]:
+    resolved = cwd.resolve()
+    entry = _file_completion_index.get(resolved)
+    if entry is not None and time.monotonic() - entry.created_at < FILE_COMPLETION_INDEX_TTL:
+        return entry.paths
+    if entry is None and len(_file_completion_index) >= _MAX_FILE_COMPLETION_INDEX_ENTRIES:
+        _evict_stale_file_completion_index_entry()
+    paths = _scan_file_reference_paths(resolved)
+    _file_completion_index[resolved] = FileCompletionIndex(
+        cwd=resolved,
+        paths=paths,
+        created_at=time.monotonic(),
+    )
+    return paths
+
+
+def _evict_stale_file_completion_index_entry() -> None:
+    """Drop one entry when the registry is at capacity on a cache miss.
+
+    Prefers expired entries; if none are expired (for example under a large
+    TTL), drops the oldest so the registry never grows past the bound.
+    """
+    now = time.monotonic()
+    for key, entry in list(_file_completion_index.items()):
+        if now - entry.created_at >= FILE_COMPLETION_INDEX_TTL:
+            del _file_completion_index[key]
+            return
+    oldest_key = min(
+        _file_completion_index,
+        key=lambda key: _file_completion_index[key].created_at,
+    )
+    del _file_completion_index[oldest_key]
+
+
+def _scan_file_reference_paths(cwd: Path) -> tuple[Path, ...]:
     if not cwd.exists() or not cwd.is_dir():
         return ()
     paths: list[Path] = []
