@@ -4,6 +4,8 @@ import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
+from packaging.version import Version
+
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_NOTES_SOURCE_PATH = ROOT / "src" / "tau_coding" / "data" / "release-notes" / "releases.json"
 RELEASE_NOTES_WHEEL_PATH = "tau_coding/data/release-notes/releases.json"
@@ -30,7 +32,10 @@ def test_current_version_has_release_notes() -> None:
     )
     release_notes = json.loads(RELEASE_NOTES_SOURCE_PATH.read_text(encoding="utf-8"))
 
-    assert any(entry["version"] == pyproject["project"]["version"] for entry in release_notes)
+    current = Version(pyproject["project"]["version"])
+    # Fork-local versions (e.g. 0.3.10+naripok.1) inherit their base
+    # version's release notes, so compare the PEP 440 public segment only.
+    assert any(Version(entry["version"]).base_version == current.base_version for entry in release_notes)
 
 
 def test_wheel_includes_release_notes_package_data(tmp_path: Path) -> None:
