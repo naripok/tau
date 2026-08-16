@@ -139,6 +139,7 @@ from tau_coding.tui.autocomplete import (
     CompletionOption,
     CompletionState,
     build_completion_state,
+    is_resume_argument_completion,
 )
 from tau_coding.tui.config import (
     TAU_DARK_THEME,
@@ -703,6 +704,11 @@ class PromptInput(TextArea):
     def _clear_pending_paste(self) -> None:
         """Forget any stored large paste content."""
         self._pending_pastes.clear()
+
+    @property
+    def has_pending_pastes(self) -> bool:
+        """Return whether large-paste content is stored for this prompt."""
+        return bool(self._pending_pastes)
 
     def sync_pending_paste(self) -> None:
         """Invalidate stored paste content when its placeholder is edited away."""
@@ -3579,6 +3585,9 @@ class TauTuiApp(App[None]):
         self._optimistic_user_messages: list[tuple[int, str]] = []
         self._completion_state = CompletionState()
         self._completion_visible_line_budget: int | None = None
+        self._resume_completion_options: tuple[CompletionOption, ...] | None = None
+        self._prompt_shell_mode: bool | None = None
+        self._prompt_shell_style: str = ""
         self._activity_frame = 0
         self._activity_timer: Timer | None = None
         self._last_tool_timer_refresh_at = 0.0
@@ -3678,6 +3687,7 @@ class TauTuiApp(App[None]):
                 self.theme = resolved_theme
         finally:
             self._applying_settings_theme = False
+        self._apply_prompt_shell_style()
         for diagnostic in diagnostics:
             severity: Literal["information", "warning", "error"] = (
                 "error"
@@ -3737,7 +3747,7 @@ class TauTuiApp(App[None]):
     async def on_mount(self) -> None:
         """Focus the prompt when the app starts."""
         prompt = self.query_one(PromptInput)
-        prompt.shell_mode_style = self.tui_settings.resolved_theme.role_styles["tool"].border
+        self._apply_prompt_shell_style()
         self._sync_prompt_shell_mode(prompt.text)
         prompt.focus()
         self._update_responsive_layout(self.size.width, self.size.height)
@@ -3862,10 +3872,13 @@ class TauTuiApp(App[None]):
         if event.text_area.id != "prompt":
             return
         prompt = self.query_one("#prompt", PromptInput)
-        prompt.sync_pending_paste()
+        if prompt.has_pending_pastes:
+            prompt.sync_pending_paste()
         self._sync_prompt_shell_mode(event.text_area.text)
-        self._completion_state = self._build_completion_state(event.text_area.text)
-        self._refresh_completions()
+        new_state = self._build_completion_state(event.text_area.text)
+        if new_state != self._completion_state:
+            self._completion_state = new_state
+            self._refresh_completions()
 
     async def action_submit_prompt(self) -> None:
         """Submit the current prompt text or slash command."""
@@ -4741,6 +4754,7 @@ class TauTuiApp(App[None]):
             sidebar_position=self.tui_settings.sidebar_position,
             turn_notification=self.tui_settings.turn_notification,
         )
+        self._apply_prompt_shell_style()
 
     def _set_tui_theme(self, theme: TuiThemeName) -> None:
         if theme not in available_tui_theme_names():
@@ -6078,7 +6092,7 @@ class TauTuiApp(App[None]):
             ),
             thinking_levels=getattr(self.session, "available_thinking_levels", ()),
             theme_names=available_tui_theme_names(),
-            session_options=_session_options(self.session),
+            session_options=self._session_completion_options_for(text),
             cwd=self.session.cwd,
         )
 
@@ -6088,12 +6102,44 @@ class TauTuiApp(App[None]):
             _prompt_footer_mode(self._completion_state, working=self._is_working())
         )
 
+    def _session_completion_options_for(self, text: str) -> tuple[CompletionOption, ...]:
+        """Return cached resume-session options, listed only when first needed.
+
+        Loading session options walks the session index on every call, so the
+        result is cached for the lifetime of an active ``/resume <text>``
+        completion interaction and discarded as soon as the prompt leaves it.
+        """
+        if not is_resume_argument_completion(text):
+            self._resume_completion_options = None
+            return ()
+        if self._resume_completion_options is None:
+            self._resume_completion_options = _session_options(self.session)
+        return self._resume_completion_options
+
     def _sync_prompt_shell_mode(self, text: str) -> None:
         prompt = self.query_one("#prompt", PromptInput)
-        prompt.shell_mode_style = self.tui_settings.resolved_theme.role_styles["tool"].border
-        prompt.set_class(_is_terminal_command_prompt(text), "-shell-mode")
-        prompt.refresh()
+        new_mode = _is_terminal_command_prompt(text)
+        if new_mode == self._prompt_shell_mode:
+            return
+        self._prompt_shell_mode = new_mode
+        prompt.set_class(new_mode, "-shell-mode")
         self._apply_activity_indicator()
+
+    def _apply_prompt_shell_style(self) -> None:
+        """Push the active theme's terminal-command style onto the prompt.
+
+        Called on mount and whenever the theme changes so the prompt's stored
+        terminal-command text style always matches the current theme, even
+        while the prompt is already in shell mode.
+        """
+        self._prompt_shell_style = self.tui_settings.resolved_theme.role_styles["tool"].border
+        if not self.screen_stack:
+            return
+        try:
+            prompt = self.query_one("#prompt", PromptInput)
+        except NoMatches:
+            return
+        prompt.shell_mode_style = self._prompt_shell_style
 
 
 def _activity_prompt_border_color(

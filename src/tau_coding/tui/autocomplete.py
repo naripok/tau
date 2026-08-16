@@ -488,6 +488,20 @@ def _skill_completions(
     return tuple(suggestions)
 
 
+def is_resume_argument_completion(text: str) -> bool:
+    """Return whether *text* requests ``/resume`` session argument completions.
+
+    Mirrors the condition under which ``_command_argument_completions`` consumes
+    ``session_options``: the first token must be ``resume`` (case-insensitive,
+    after removing a leading ``/``) and argument text must follow the token.
+    """
+    token_end = _first_token_end(text)
+    if token_end >= len(text):
+        return False
+    command_name = text[:token_end].removeprefix("/").lower()
+    return command_name == "resume"
+
+
 def _command_argument_completions(
     *,
     text: str,
