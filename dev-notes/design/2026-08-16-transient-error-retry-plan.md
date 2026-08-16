@@ -653,12 +653,11 @@ Add `TurnRetryStartEvent` to the `AgentEvent` union next to the other turn event
 
 - [ ] **Step 5: Implement the retry loop** (`src/tau_agent/loop.py`)
 
-Add the parameter to `run_agent_loop` (after `max_turns`):
+Add the single new parameter to `run_agent_loop`, right after the existing
+`max_turns` line (do not duplicate the surrounding parameters):
 
 ```python
-    max_turns: int | None = None,
     max_turn_retries: int = 0,
-    signal: CancellationToken | None = None,
 ```
 
 In `run_agent_loop`'s inner `while has_more_tools or pending:` block, update the provider-consumption site to pass the budget:
