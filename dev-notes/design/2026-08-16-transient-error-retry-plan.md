@@ -277,6 +277,14 @@ def retryable_error(message: str, *, partial: str = "") -> AssistantErrorEvent:
 - [ ] **Step 4: Write the failing tests** (append to `tests/test_tau_ai.py`, next to the existing canonicalize tests — locate them with `rg -n "canonicalize_provider_stream" tests/test_tau_ai.py`)
 
 ```python
+def _async_events(
+    events: list[ProviderEvent],
+) -> AsyncIterator[ProviderEvent]:
+    """Yield provider events one at a time for canonicalize tests."""
+    for event in events:
+        yield event
+
+
 @pytest.mark.anyio
 async def test_canonicalize_forwards_retryable_error_flag() -> None:
     """Prove the adapter's retryable classification reaches the agent layer."""
@@ -287,13 +295,15 @@ async def test_canonicalize_forwards_retryable_error_flag() -> None:
     events = [
         event
         async for event in canonicalize_provider_stream(
-            [
-                ProviderErrorEvent(
-                    message="peer closed connection",
-                    data={"attempts": 1, "error_type": "RemoteProtocolError"},
-                    retryable=True,
-                )
-            ],
+            _async_events(
+                [
+                    ProviderErrorEvent(
+                        message="peer closed connection",
+                        data={"attempts": 1, "error_type": "RemoteProtocolError"},
+                        retryable=True,
+                    )
+                ]
+            ),
             api="openai-completions",
             provider="openai",
             model="test-model",
@@ -314,7 +324,9 @@ async def test_canonicalize_defaults_retryable_to_false() -> None:
     events = [
         event
         async for event in canonicalize_provider_stream(
-            [ProviderErrorEvent(message="invalid api key", data={"attempts": 1})],
+            _async_events(
+                [ProviderErrorEvent(message="invalid api key", data={"attempts": 1})]
+            ),
             api="openai-completions",
             provider="openai",
             model="test-model",
@@ -324,6 +336,12 @@ async def test_canonicalize_defaults_retryable_to_false() -> None:
     assert isinstance(events[-1], AssistantErrorEvent)
     assert events[-1].retryable is False
 ```
+
+> `canonicalize_provider_stream` consumes an async iterable, so the tests wrap
+> the event lists in `_async_events`; `ProviderEvent` comes from
+> `tau_ai._provider_events` and `AsyncIterator` from `collections.abc` (import
+> both at the top of the test section if the file does not already import
+> them).
 
 - [ ] **Step 5: Run the tests to verify they fail, then pass after Step 1–2**
 
@@ -797,7 +815,7 @@ In `_run`, pass the budget to `run_agent_loop` (after `max_turns=...`):
                 max_turn_retries=self._config.max_turn_retries,
 ```
 
-Export `DEFAULT_TURN_RETRIES` from `src/tau_agent/__init__.py` if the package has an explicit export list (check `rg -n "max_turns|AgentHarnessConfig" src/tau_agent/__init__.py`; the test imports `DEFAULT_TURN_RETRIES` from `tau_agent`).
+Export `DEFAULT_TURN_RETRIES` AND `TurnRetryStartEvent` from `src/tau_agent/__init__.py` if the package has an explicit export list (check `rg -n "max_turns|AgentHarnessConfig" src/tau_agent/__init__.py` and the `from tau_agent.events import (...)` re-export near the top; the tests import `DEFAULT_TURN_RETRIES` and `TurnRetryStartEvent` from `tau_agent`, so both names must be exported or the tests fail with ImportError).
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
@@ -844,6 +862,7 @@ def test_classify_terminal_markers_override_transient_status() -> None:
     assert is_retryable_http_failure(503, "try later") is True
     assert is_retryable_http_failure(429, "insufficient_quota") is False
     assert is_retryable_http_failure(429, "monthly usage limit reached") is False
+    assert is_retryable_http_failure(429, "quota exceeded for this model") is False
     assert is_retryable_http_failure(429, "maximum context length exceeded") is False
     assert is_retryable_http_failure(400, "bad request") is False
 
@@ -876,6 +895,8 @@ TERMINAL_RATE_LIMIT_MARKERS = (
     "available balance",
     "insufficient_quota",
     "out of budget",
+    "quota exceeded",
+    "billing",
 )
 
 CONTEXT_OVERFLOW_MARKERS = (
@@ -1176,13 +1197,13 @@ async def test_openai_compatible_tail_read_completes_with_diagnostic() -> None:
     )
 ```
 
-> Note: the `TailDroppingStream.aclose` raise models the real chunked-body
-> terminator failure; if `MockTransport` does not propagate `aclose` raises in
-> the installed httpx version, raise the error in `__aiter__` after yielding
-> the final `[DONE]` line instead — `aiter_lines` surfaces it on the next pull,
-> which happens after the parser already stopped on `[DONE]` only if the
-> envelope restructure in Step 4 moved finalize outside the read loop, so run
-> the test first and adjust the failure injection only if needed.
+> The `TailDroppingStream.aclose` raise models the real chunked-body
+> terminator failure: the response context manager calls `stream.aclose()` on
+> exit, and httpx's `MockTransport` propagates raises from the handler's
+> stream `aclose`, so the envelope's `except httpx.HTTPError` branch is
+> exercised after `finalize()` already produced the complete events. This is
+> the only reliable injection point — raising in `__aiter__` cannot work for
+> the tail case because the envelope stops reading at the terminal marker.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -1477,6 +1498,48 @@ async def test_anthropic_in_stream_overload_after_content_is_retryable() -> None
 
 
 @pytest.mark.anyio
+async def test_anthropic_in_stream_usage_marker_not_retryable() -> None:
+    """Prove a rate-limit stream error with a usage marker stays terminal."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"content_block_delta","delta":'
+                '{"type":"text_delta","text":"partial"}}\n\n'
+                'data: {"type":"error","error":'
+                '{"type":"rate_limit_error","message":"monthly usage limit reached"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                provider_name="anthropic",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is False
+
+
+@pytest.mark.anyio
 async def test_anthropic_tail_read_completes_with_diagnostic() -> None:
     """Prove an Anthropic drop after message_stop completes the message."""
     requests: list[httpx.Request] = []
@@ -1636,7 +1699,8 @@ with:
                                     message=message,
                                     data={"event": chunk, "attempts": attempt + 1},
                                     retryable=_retryable_anthropic_stream_error(error_type)
-                                    and not is_context_overflow(message),
+                                    and not is_context_overflow(message)
+                                    and not is_terminal_rate_limit(message),
                                 )
                                 return
 ```
@@ -1767,6 +1831,9 @@ async def test_openai_codex_in_stream_overload_after_content_is_retryable() -> N
     """Prove a Codex in-stream overload error after content is classified retryable."""
     requests: list[httpx.Request] = []
 
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         body = (
@@ -1781,7 +1848,9 @@ async def test_openai_codex_in_stream_overload_after_content_is_retryable() -> N
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OpenAICodexProvider(
             OpenAICodexConfig(
-                credential_resolver=StaticCodexCredentialResolver(),
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                provider_name="openai-codex",
                 max_retries=2,
                 max_retry_delay_seconds=0,
             ),
@@ -1806,6 +1875,9 @@ async def test_openai_codex_tail_read_completes_with_diagnostic() -> None:
     """Prove a Codex drop after response.completed completes the message."""
     requests: list[httpx.Request] = []
 
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
     class TailDroppingStream(httpx.AsyncByteStream):
         async def __aiter__(self) -> AsyncIterator[bytes]:
             yield (
@@ -1829,7 +1901,9 @@ async def test_openai_codex_tail_read_completes_with_diagnostic() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OpenAICodexProvider(
             OpenAICodexConfig(
-                credential_resolver=StaticCodexCredentialResolver(),
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                provider_name="openai-codex",
             ),
             client=client,
         )
@@ -1850,10 +1924,12 @@ async def test_openai_codex_tail_read_completes_with_diagnostic() -> None:
     )
 ```
 
-> `StaticCodexCredentialResolver` is whatever credential resolver the existing
-> Codex tests construct (check their imports); reuse it. The
-> `response.completed` payload shape must match what the existing Codex tests
-> feed — mirror their fixtures exactly and add only the tail-drop stream.
+> The credential resolver and `base_url`/`provider_name` mirror the existing
+> Codex tests verbatim (e.g. `test_openai_codex_provider_surfaces_stream_error_after_retry_exhaustion`
+> at `tests/test_tau_ai.py:1354`, which also defines the module-level
+> `_CODEX_OVERLOAD_ERROR_SSE` fixture). The `response.completed` payload shape
+> must match what the existing Codex tests feed — mirror their fixtures exactly
+> and add only the tail-drop stream.
 
 - [ ] **Step 6: Run them to verify they fail**
 
@@ -1957,12 +2033,6 @@ with:
                             ):
                                 stream_error = _stream_error_event_data(event)
                                 break
-                            if isinstance(event, ProviderErrorEvent) and not (
-                                _retryable_stream_error_event(event)
-                                and not is_context_overflow(event.message)
-                            ):
-                                # Terminal in-stream errors keep their plain shape.
-                                pass
                             yield event
                         if stream_error is None:
                             if final_event is not None:
@@ -2077,7 +2147,7 @@ git commit -m "feat(providers): classify anthropic and codex transient failures"
 
 - [ ] **Step 1: Write the failing tests** (model on the openai-compatible tests from Task 5; both adapters use `FailingStream`/`TailDroppingStream` shapes)
 
-For google (`src/tau_ai/google.py` exports `GoogleProvider`/`GoogleConfig` — check existing tests for the exact names):
+For google (the real classes are `GoogleGenerativeAIProvider`/`OpenAICompatibleConfig`; model the construction on the existing Google test at `tests/test_tau_ai.py:544`, which uses `base_url="https://generativelanguage.googleapis.com/v1beta"`):
 
 ```python
 @pytest.mark.anyio
@@ -2102,8 +2172,13 @@ async def test_google_marks_mid_stream_transport_drop_retryable() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = GoogleProvider(
-            GoogleConfig(api_key="test-key", max_retries=2, max_retry_delay_seconds=0),
+        provider = GoogleGenerativeAIProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://generativelanguage.googleapis.com/v1beta",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
             client=client,
         )
         events = await _collect(
@@ -2144,8 +2219,11 @@ async def test_google_tail_read_completes_with_diagnostic() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = GoogleProvider(
-            GoogleConfig(api_key="test-key"),
+        provider = GoogleGenerativeAIProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://generativelanguage.googleapis.com/v1beta",
+            ),
             client=client,
         )
         events = await _collect(
@@ -2164,7 +2242,7 @@ async def test_google_tail_read_completes_with_diagnostic() -> None:
     )
 ```
 
-For mistral, mirror the two tests with `MistralProvider`/`MistralConfig` and this SSE shape (`[DONE]` terminator, chat-completions chunks — copy the shapes from the existing mistral tests; locate with `rg -n "mistral" tests/test_tau_ai.py | head`):
+For mistral, the real classes are `MistralConversationsProvider`/`OpenAICompatibleConfig` (the adapter appends `/v1` to the base URL itself). There are NO existing mistral tests in the suite — the SSE shape is the same chat-completions contract as the openai-compatible parser (`choices[].delta.content` chunks plus a `data: [DONE]` terminator), which is exactly what `_MistralStreamParser.feed` consumes. Use this test:
 
 ```python
 @pytest.mark.anyio
@@ -2186,8 +2264,13 @@ async def test_mistral_marks_mid_stream_drop_retryable() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = MistralProvider(
-            MistralConfig(api_key="test-key", max_retries=2, max_retry_delay_seconds=0),
+        provider = MistralConversationsProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://api.mistral.ai",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
             client=client,
         )
         events = await _collect(
@@ -2379,6 +2462,54 @@ async def test_prompt_logs_exhausted_retries_and_terminal_error(tmp_path: Path) 
     assert len(error_entries) == 1
     assert error_entries[0]["error"]["stop_reason"] == "error"
 ```
+
+Append the one-shot scope test after it:
+
+```python
+async def test_auto_naming_failure_is_never_turn_retried(tmp_path: Path) -> None:
+    """Prove one-shot provider calls (auto-naming) bypass turn-level retry."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    provider = FakeProvider(
+        [
+            # stream 0: auto-naming call (one-shot, transient-shaped failure)
+            [assistant_error("peer closed connection")],
+            # stream 1: the main assistant turn
+            [assistant_start(), assistant_done(AssistantMessage(content="ok", model="fake"))],
+        ]
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            auto_compact_enabled=False,
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    assert len(provider.calls) == 2
+    log_path = tau_paths.agent_calls_log_path
+    entries = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if "retry" in line
+    ]
+    assert all(entry["kind"] != "assistant_retry" for entry in entries)
+```
+
+> The auto-naming call consumes the first fake stream — a transient-looking
+> error — and the harness consumes the second. Because retry logic lives only
+> in the harness loop, the one-shot call is attempted exactly once. If the
+> session's auto-naming path already swallows failed names silently, the test
+> still holds: provider call count proves no retry, and the log proves no
+> `assistant_retry` entry.
 
 > Note: the `CodingSession` harness uses `max_turn_retries` from its harness
 > config. Until Task 9 lands, the harness default (2) applies — these tests
@@ -2575,6 +2706,11 @@ def _validate_provider_numbers(
 5. Add `"turn_retry_max": self.turn_retry_max,` to the `to_json()` dict of all three models (after `max_retry_delay_seconds`).
 
 6. Preserve existing values in the three merge helpers (`_merge_openai_compatible_provider`, `_merge_anthropic_provider`, and the inline `OpenAICodexProviderConfig` merge): add `turn_retry_max=existing.turn_retry_max` to each `replace(...)` call.
+7. Make `turn_retry_max` survive the settings round-trip, mirroring exactly how `max_retries` travels:
+   - `_provider_preference_to_json` (line ~1053): add `"turn_retry_max": provider.turn_retry_max,` next to `"max_retries"`.
+   - `_apply_provider_preference` (line ~1251): when `"turn_retry_max" in value`, parse it with `_non_negative_int(value.get("turn_retry_max"), f"provider_preferences.{provider.name}.turn_retry_max")`, and pass `turn_retry_max=turn_retry_max` into both `replace(...)` constructions in the function.
+   - `_provider_from_json` (line ~1940): read `turn_retry_max = _non_negative_int(data.get("turn_retry_max", DEFAULT_TURN_RETRIES), f"providers[{name}].turn_retry_max")` and pass it into every provider-config construction branch (anthropic, openai-codex, openai-compatible, google-generative-ai, mistral-conversations).
+   Without these, `load_provider_settings` silently drops the budget back to the default and the setup round-trip test fails.
 
 - [ ] **Step 4: Wire the harness budget in the session** (`src/tau_coding/session.py`)
 
@@ -2667,7 +2803,47 @@ async def test_session_uses_provider_turn_retry_budget(tmp_path: Path) -> None:
     await _collect_session_events(session.prompt("Hello"))
 
     assert len(provider.calls) == 3
-    assert session.harness.config.max_turn_retries == 2
+    assert session.messages[-1].text == "recovered"
+```
+
+> `CodingSession` has no public `harness` property, so the assertion is
+> behavioral: two retries happened (three provider calls) and the turn ended
+> with the recovered message.
+
+Append a zero-budget companion right after it:
+
+```python
+async def test_session_zero_turn_retry_budget_disables_retries(tmp_path: Path) -> None:
+    """Prove a provider with a zero budget ends immediately on a retryable error."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    provider = FakeProvider(
+        [
+            [assistant_start(), retryable_error("drop")],
+            [assistant_start(), assistant_done(AssistantMessage(content="never", model="fake"))],
+        ]
+    )
+    runtime_config = OpenAICompatibleProviderConfig(
+        name="test",
+        turn_retry_max=0,
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            runtime_provider_config=runtime_config,
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    assert len(provider.calls) == 1
 ```
 
 (If `CodingSessionConfig.runtime_provider_config` typing is narrower, cast to the union type the config accepts; verify with the type checker.)
@@ -3141,4 +3317,4 @@ Expected: PASS
 - Delta → plan: each requirement has at least one failing test per task mapping (classification → Tasks 4–7, tail failure → Tasks 5–7, bounded retry → Task 3, budget config → Task 9, setup interface → Task 9, cancellation → Task 3, transcript rollback → Task 10, terminal projection → Task 10, print notice → Task 11, retry diagnostics → Task 8, overflow unchanged → Task 4, retry scope → Task 3).
 - Plan → spec: no task falls outside the spec's scope (docs/verification tasks are required by AGENTS.md, not scope creep).
 - Type consistency: `max_turn_retries` is used identically in `run_agent_loop`, `AgentHarnessConfig`, and session wiring; `TurnRetryStartEvent` fields are consumed by adapter/app/renderer/diagnostics with the same names; `retryable` defaults to `False` everywhere so existing providers/tests keep their behavior.
-- Known follow-ups flagged for the implementer (not blockers): exact fixture shapes for Codex SSE payloads and existing TUI/session test harnesses must be copied from neighboring tests; `MockTransport` `aclose` propagation must be verified empirically in Task 5 Step 2 (fallback documented); `DEFAULT_TURN_RETRIES` export in `tau_agent/__init__.py` must be added if the package uses an explicit export list.
+- Known follow-ups flagged for the implementer (not blockers): Codex SSE fixture payloads for the new tail-read and in-stream tests must mirror the shapes in the existing Codex tests (`_CODEX_OVERLOAD_ERROR_SSE`, `response.completed`); the TUI/session test harness shapes are pinned to the existing tests they cite; `DEFAULT_TURN_RETRIES` and `TurnRetryStartEvent` exports in `tau_agent/__init__.py` must be added (Task 3 Step 6); the anthropic `message_stop` break (Task 6) is a behavior-preserving change for well-formed streams since `message_stop` is the protocol's terminal event.
