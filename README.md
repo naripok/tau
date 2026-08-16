@@ -1,3 +1,7 @@
+> This is a vibecoded mess on top of `huggingface/tau`. I've added some TUI performance improvements and adapted some UX to my workflow.
+>
+> USE AT YOUR OWN RISK!!!
+
 <p align="center">
   <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
 </p>
