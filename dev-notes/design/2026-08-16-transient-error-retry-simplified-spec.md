@@ -51,7 +51,7 @@ retryable.
 - WHEN the turn loop receives the terminal error
 - THEN the failure is classified as retryable.
 
-##### Scenario: exhausted transient status
+##### Scenario: transient status is retryable
 - GIVEN a provider call fails with HTTP 503
 - WHEN the turn loop receives the terminal error
 - THEN the failure is classified as retryable.
@@ -150,7 +150,7 @@ configuration.
 ##### Scenario: reason names the failure
 - GIVEN a turn's provider call fails retryably with HTTP 503
 - WHEN the retry-start event is emitted
-- THEN its reason identifies HTTP 503.
+- THEN its reason equals `HTTP 503`.
 
 ##### Scenario: mixed outcomes end the retry sequence
 - GIVEN the first attempt of a turn fails retryably with HTTP 503 and the
