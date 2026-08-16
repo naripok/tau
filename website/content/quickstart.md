@@ -115,7 +115,7 @@ You'll see each tool call (read, edit, bash) as it happens.
 
 {{% tip title="Useful first keys" %}}
 **Enter** submits · **Esc** cancels the current run · **Ctrl+K** opens the
-command palette · **Ctrl+D** quits. Full list in
+command palette. Full list in
 [Keyboard shortcuts]({{< relref "./reference/keybindings.md" >}}).
 {{% /tip %}}
 

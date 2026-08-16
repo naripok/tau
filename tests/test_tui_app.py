@@ -2562,7 +2562,6 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
         assert not app.query("Footer")
         assert len(app.query("#shortcut-hints")) == 0
         assert _visible_footer_bindings(app) == {
-            "Quit": "ctrl+d",
             "Clear": "ctrl+c",
             "Commands": "ctrl+k",
             "Submit": "enter",
@@ -6128,24 +6127,28 @@ async def test_tui_app_uses_configured_command_palette_keybinding() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_quits_from_focused_prompt_with_default_keybinding() -> None:
+async def test_tui_app_ctrl_d_does_not_quit() -> None:
+    """Ctrl+D quit is removed: the key has no quit binding and does not exit.
+
+    Tau deliberately binds no quit hotkey, so pressing the terminal's EOF
+    reflex must never tear down the app.
+    """
     app = TauTuiApp(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt")
-        visible_bindings = [
-            binding for binding in prompt._bindings.get_bindings_for_key("ctrl+d") if binding.show
+        quit_bindings = [
+            binding
+            for binding in prompt._bindings.get_bindings_for_key("ctrl+d")
+            if binding.action == "quit"
         ]
 
-        assert any(
-            binding.action == "quit" and binding.description == "Quit"
-            for binding in visible_bindings
-        )
+        assert quit_bindings == []
 
         await pilot.press("ctrl+d")
         await pilot.pause()
 
-        assert app._exit is True
+        assert app.is_running
 
 
 @pytest.mark.anyio
@@ -6583,7 +6586,12 @@ async def test_tui_login_escape_returns_from_provider_picker_to_method_picker() 
 
 
 @pytest.mark.anyio
-async def test_tui_login_ctrl_d_closes_modal_without_closing_app() -> None:
+async def test_tui_login_ctrl_d_does_not_close_modal() -> None:
+    """Ctrl+D no longer closes the login modal: only Esc does.
+
+    The login screens' hardcoded close bindings were removed together with the
+    quit hotkey, so the terminal's EOF reflex must leave the login flow open.
+    """
     app = TauTuiApp(FakeSession())
 
     async with app.run_test() as pilot:
@@ -6598,8 +6606,12 @@ async def test_tui_login_ctrl_d_closes_modal_without_closing_app() -> None:
         await pilot.press("ctrl+d")
         await pilot.pause()
         assert app.is_running
-        assert not isinstance(app.screen, LoginProviderPickerScreen)
-        assert not isinstance(app.screen, LoginMethodPickerScreen)
+        assert isinstance(app.screen, LoginProviderPickerScreen)
+
+        # Escape still dismisses the picker back to the method picker.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, LoginMethodPickerScreen)
 
 
 @pytest.mark.anyio
@@ -9332,16 +9344,16 @@ async def test_component_key_interceptor_skipped_while_modal_open() -> None:
 
 @pytest.mark.anyio
 async def test_component_interceptor_never_consumes_reserved_interrupt_keys() -> None:
-    """The hard interrupt/exit keys bypass the interceptor entirely.
+    """Ctrl+C bypasses the interceptor; ctrl+d is no longer reserved.
 
     A buggy interceptor that returns True for everything must not be able to
-    swallow ctrl+c/ctrl+d and brick the session: those keys are skipped before
-    the consult (never reach the interceptor) and flow to normal dispatch, so
-    the app's escape hatches always fire. Everything else (e.g. escape) stays
-    interceptable.
+    swallow ctrl+c (the SIGINT/interrupt reflex, bound to clear_prompt) and
+    brick the session: it is skipped before the consult (never reaches the
+    interceptor) and flows to normal dispatch. With the quit hotkey removed,
+    ctrl+d is an ordinary key the interceptor may consume. Everything else
+    (e.g. escape) stays interceptable.
     """
-    assert "ctrl+c" in RESERVED_EXTENSION_INTERCEPTOR_KEYS
-    assert "ctrl+d" in RESERVED_EXTENSION_INTERCEPTOR_KEYS
+    assert {"ctrl+c"} == RESERVED_EXTENSION_INTERCEPTOR_KEYS
     assert "escape" not in RESERVED_EXTENSION_INTERCEPTOR_KEYS
 
     app = TauTuiApp(FakeSession())
@@ -9350,12 +9362,6 @@ async def test_component_interceptor_never_consumes_reserved_interrupt_keys() ->
         await pilot.pause()
         bridge = _component_bridge(app)
         seen: list[str] = []
-        quits: list[int] = []
-
-        async def fake_quit() -> None:  # don't actually tear down the pilot
-            quits.append(1)
-
-        app.action_quit = fake_quit  # type: ignore[method-assign]
 
         # Greedy interceptor: consumes literally every key it is consulted for.
         bridge.register_key_interceptor(lambda event, text: (seen.append(event.key), True)[1])
@@ -9372,11 +9378,10 @@ async def test_component_interceptor_never_consumes_reserved_interrupt_keys() ->
         assert "ctrl+c" not in seen
         assert prompt.text == ""
 
-        # ctrl+d (quit / hard exit): never consulted, and quit still fires.
+        # ctrl+d (no longer a quit key): consulted like any ordinary key.
         await pilot.press("ctrl+d")
         await pilot.pause()
-        assert "ctrl+d" not in seen
-        assert quits == [1]
+        assert "ctrl+d" in seen
 
         # A non-reserved key is still routed through the interceptor.
         await pilot.press("escape")

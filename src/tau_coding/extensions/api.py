@@ -260,11 +260,10 @@ class ComponentBridge(Protocol):
         top), so the handler MUST self-gate and return ``True`` only for keys it
         consumes.
 
-        The host's hard interrupt/exit keys (``ctrl+c`` and ``ctrl+d``) are
-        reserved: the interceptor is never consulted for them and cannot
-        consume them, so a bug in the handler can never swallow the session's
-        escape hatches. All other keys — escape, enter, arrows, tab — remain
-        interceptable.
+        The host's hard interrupt/exit key (``ctrl+c``) is reserved: the
+        interceptor is never consulted for it and cannot consume it, so a bug
+        in the handler can never swallow the session's hard interrupt reflex.
+        All other keys — escape, enter, arrows, tab — remain interceptable.
         """
         ...
 
@@ -533,8 +532,8 @@ class UiBridge(Protocol):
         See the base bridge protocol: the handler is consulted before the
         host's priority bindings and the focused widget, fires for every
         main-screen key regardless of focus, and must self-gate. The hard
-        interrupt/exit keys (``ctrl+c`` and ``ctrl+d``) are reserved and never
-        reach the interceptor.
+        interrupt/exit key (``ctrl+c``) is reserved and never reaches the
+        interceptor.
         """
         ...
 

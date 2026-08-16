@@ -627,10 +627,6 @@ class PromptInput(TextArea):
         """Insert a newline in the prompt."""
         self.insert("\n")
 
-    async def action_quit(self) -> None:
-        """Quit the app through the app-level action."""
-        await self.app.action_quit()
-
     def action_scroll_down(self) -> None:
         """Use down arrow for completion selection while focused."""
         self.action_completion_next()
@@ -791,9 +787,6 @@ class PromptInput(TextArea):
         elif event.key == keybindings.completion_previous:
             event.stop()
             self.action_completion_previous()
-        elif event.key == keybindings.quit:
-            event.stop()
-            await self.action_quit()
 
     def _has_completion_options(self) -> bool:
         completion_state = getattr(self.app, "_completion_state", None)
@@ -2009,7 +2002,6 @@ class LoginProviderPickerScreen(ModalScreen[str | _LoginFlowAction | None]):
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+d", "close", "Close", priority=True),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Select", show=False),
@@ -2100,10 +2092,6 @@ class LoginProviderPickerScreen(ModalScreen[str | _LoginFlowAction | None]):
         """Go back in a login flow, or close a standalone provider picker."""
         self.dismiss(_LoginFlowAction.BACK if self.back_on_cancel else None)
 
-    def action_close(self) -> None:
-        """Close the entire login flow."""
-        self.dismiss(None)
-
     def _select_visible_provider(self) -> None:
         provider_list = self.query_one("#login-provider-list", ListView)
         index = provider_list.index
@@ -2147,7 +2135,6 @@ class LoginMethodPickerScreen(ModalScreen[str | None]):
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
         Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("ctrl+d", "cancel", "Close", priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
         Binding("down", "cursor_down", "Down", show=False, priority=True),
         Binding("enter", "select_cursor", "Select", show=False, priority=True),
@@ -2177,7 +2164,7 @@ class LoginMethodPickerScreen(ModalScreen[str | None]):
                 ),
                 id="login-method-list",
             )
-            yield Static("Enter selects - Escape/Ctrl+D closes", id="login-method-help")
+            yield Static("Enter selects - Escape closes", id="login-method-help")
 
     def on_mount(self) -> None:
         """Focus the default subscription method."""
@@ -2614,7 +2601,6 @@ class CustomProviderLoginScreen(ModalScreen[CustomProviderLoginResult | _LoginFl
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
         Binding("escape", "back", "Back"),
-        Binding("ctrl+d", "close", "Close", priority=True),
     ]
 
     _INPUT_ORDER: ClassVar[tuple[str, ...]] = (
@@ -2666,7 +2652,7 @@ class CustomProviderLoginScreen(ModalScreen[CustomProviderLoginResult | _LoginFl
                 id="custom-provider-api-key",
             )
             yield Static(
-                "Enter advances/saves - Escape goes back - Ctrl+D closes",
+                "Enter advances/saves - Escape goes back",
                 id="login-footer",
             )
 
@@ -2748,17 +2734,12 @@ class CustomProviderLoginScreen(ModalScreen[CustomProviderLoginResult | _LoginFl
         """Return to the login method picker."""
         self.dismiss(_LoginFlowAction.BACK)
 
-    def action_close(self) -> None:
-        """Close the entire login flow."""
-        self.dismiss(None)
-
 
 class LoginScreen(ModalScreen[str | _LoginFlowAction | None]):
     """Password prompt for saving a provider API key."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
         Binding("escape", "back", "Back"),
-        Binding("ctrl+d", "close", "Close", priority=True),
     ]
 
     def __init__(self, provider: ProviderCatalogEntry, *, theme: TuiTheme) -> None:
@@ -2772,7 +2753,7 @@ class LoginScreen(ModalScreen[str | _LoginFlowAction | None]):
             yield Static(f"Login: {self.provider.display_name}", id="login-title")
             yield Static("Paste this provider's API key.", id="login-help")
             yield Input(placeholder="Paste API key", password=True, id="login-api-key")
-            yield Static("Enter saves - Escape goes back - Ctrl+D closes", id="login-footer")
+            yield Static("Enter saves - Escape goes back", id="login-footer")
 
     def on_mount(self) -> None:
         """Focus the API key field."""
@@ -2789,17 +2770,12 @@ class LoginScreen(ModalScreen[str | _LoginFlowAction | None]):
         """Return to the login method picker without saving."""
         self.dismiss(_LoginFlowAction.BACK)
 
-    def action_close(self) -> None:
-        """Close the entire login flow."""
-        self.dismiss(None)
-
 
 class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
     """OAuth login flow for providers backed by subscription auth."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
         Binding("escape", "back", "Back"),
-        Binding("ctrl+d", "close", "Close", priority=True),
     ]
 
     def __init__(
@@ -2827,7 +2803,7 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
                 placeholder="Paste redirect URL or authorization code",
                 id="login-oauth-code",
             )
-            yield Static("Enter submits - Escape goes back - Ctrl+D closes", id="login-footer")
+            yield Static("Enter submits - Escape goes back", id="login-footer")
 
     def on_mount(self) -> None:
         """Focus the manual-code field and start OAuth."""
@@ -2927,11 +2903,6 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
         self._cancel_manual_code_input()
         self.dismiss(_LoginFlowAction.BACK)
 
-    def action_close(self) -> None:
-        """Close the entire login flow without saving credentials."""
-        self._cancel_manual_code_input()
-        self.dismiss(None)
-
     def _cancel_manual_code_input(self) -> None:
         if self._manual_code_future is not None and not self._manual_code_future.done():
             self._manual_code_future.cancel()
@@ -2939,16 +2910,17 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
 
 #: Keys an extension key interceptor is never consulted for. These flow
 #: straight to normal dispatch so a buggy interceptor (one that returns True
-#: too broadly) cannot swallow the session's hard interrupt/exit reflexes and
-#: brick the TUI. Deliberately minimal — only the always-available escape
-#: hatches: ``ctrl+d`` (the ``quit`` action, exits the app) and ``ctrl+c``
-#: (Tau binds it to ``clear_prompt``, but it is the terminal-standard
-#: SIGINT/interrupt reflex users hit to bail). NOT reserved: escape/enter/
-#: arrows/tab/left/right — those are load-bearing for the tau-subagents
-#: extension and must stay interceptable. This is Tau's counterpart to Pi's
-#: ``RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS`` (runner.ts:69), applied
-#: here to the pre-dispatch interceptor rather than a registerShortcut API.
-RESERVED_EXTENSION_INTERCEPTOR_KEYS: frozenset[str] = frozenset({"ctrl+c", "ctrl+d"})
+#: too broadly) cannot swallow the session's hard interrupt reflex and brick
+#: the TUI. Deliberately minimal — only the always-available escape hatch:
+#: ``ctrl+c`` (Tau binds it to ``clear_prompt``, but it is the
+#: terminal-standard SIGINT/interrupt reflex users hit to bail). NOT
+#: reserved: escape/enter/arrows/tab/left/right — those are load-bearing for
+#: the tau-subagents extension and must stay interceptable. Tau deliberately
+#: binds no quit hotkey, so there is no quit key to protect here. This is
+#: Tau's counterpart to Pi's ``RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS``
+#: (runner.ts:69), applied here to the pre-dispatch interceptor rather than a
+#: registerShortcut API.
+RESERVED_EXTENSION_INTERCEPTOR_KEYS: frozenset[str] = frozenset({"ctrl+c"})
 
 #: Development-only slow-interceptor diagnostic. Interceptors run synchronously
 #: on every main-screen key before Textual dispatch, so a handler that exceeds
@@ -6894,7 +6866,6 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
         Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
         Binding(keybindings.copy_message, "clear_prompt", "Clear input"),
-        Binding(keybindings.quit, "quit", "Quit"),
     ]
 
 
@@ -6957,7 +6928,6 @@ def _prompt_bindings(
             "Clear",
             priority=True,
         ),
-        Binding(keybindings.quit, "quit", "Quit", priority=True),
     ]
     return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
 
@@ -6980,7 +6950,6 @@ def _hidden_prompt_bindings(
         (keybindings.accept_completion, "accept_completion"),
         (keybindings.completion_next, "completion_next"),
         (keybindings.completion_previous, "completion_previous"),
-        (keybindings.quit, "quit"),
     )
     return [
         Binding(key, action, show=False, priority=True)

@@ -26,7 +26,6 @@ def test_load_tui_settings_returns_defaults_when_file_is_missing(tmp_path: Path)
     paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
 
     assert load_tui_settings(paths) == TuiSettings()
-    assert load_tui_settings(paths).keybindings.quit == "ctrl+d"
 
 
 def test_load_tui_settings_reads_keybindings(tmp_path: Path) -> None:
@@ -102,6 +101,8 @@ def test_tui_settings_ignore_unknown_fields() -> None:
 
 
 def test_tui_keybindings_ignore_unknown_actions() -> None:
+    # "quit" is the removed close hotkey; old configs that still set it are
+    # ignored rather than rejected.
     settings = tui_settings_from_json(
         {
             "keybindings": {
@@ -111,7 +112,7 @@ def test_tui_keybindings_ignore_unknown_actions() -> None:
         }
     )
 
-    assert settings.keybindings.quit == "f12"
+    assert settings == TuiSettings()
 
 
 def test_tui_keybindings_reject_duplicate_keys() -> None:

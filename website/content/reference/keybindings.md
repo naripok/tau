@@ -43,7 +43,6 @@ These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md
 | --- | --- |
 | `Ctrl+O` | Toggle full tool output (vs. compact preview) |
 | `Ctrl+C` | Clear the prompt input |
-| `Ctrl+D` | Quit |
 
 {{% note title="Remapping" %}}
 Keys use Textual's syntax (`ctrl+k`, `shift+tab`, `down`, `f2`, …). Tau rejects

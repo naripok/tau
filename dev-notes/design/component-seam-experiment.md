@@ -441,18 +441,19 @@ re-invokes slot factories (drop + remount, or call an optional
 > returns `True` too broadly could swallow the session's hard interrupt/exit
 > keys and brick the TUI (no way out). The host therefore skips the consult
 > entirely for a minimal `RESERVED_EXTENSION_INTERCEPTOR_KEYS` frozenset —
-> `{"ctrl+c", "ctrl+d"}` — so those keys always flow to normal dispatch
-> untouched. These are the app's actual escape hatches: `ctrl+d` is bound to
-> the `quit` action (exits the app) and `ctrl+c` to `clear_prompt` but is the
-> terminal-standard SIGINT/interrupt reflex; `ctrl+q` is deliberately *not*
-> included because tau's `_bindings` (`_app_bindings`) does not actually bind
-> it. **Deviation from Pi (deliberate):** Pi's
+> `{"ctrl+c"}` — so that key always flows to normal dispatch untouched. It is
+> the app's actual escape hatch: `ctrl+c` is bound to `clear_prompt` but is
+> the terminal-standard SIGINT/interrupt reflex. Tau deliberately binds no
+> quit hotkey (the old `ctrl+d` quit binding was removed), so there is no
+> quit key to protect; `ctrl+q` is deliberately *not* included because tau's
+> `_bindings` (`_app_bindings`) does not actually bind it. **Deviation from
+> Pi (deliberate):** Pi's
 > `RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS` (`runner.ts:69` — `app.interrupt`,
 > `app.exit`, `app.model.*`, `tui.input.submit`) guards its *`registerShortcut`*
 > API, while Pi's raw `onTerminalInput` is unrestricted. Tau's interceptor *is*
 > the `onTerminalInput` port, but unlike Pi's it fires pre-dispatch and is the
-> only key hook, so it gets a reserved subset — and only the two hard
-> interrupt/exit keys, not Pi's fuller list. Explicitly **not** reserved:
+> only key hook, so it gets a reserved subset — and only the hard interrupt
+> key, not Pi's fuller list. Explicitly **not** reserved:
 > `escape`, `enter`, arrows, `tab`, `left`/`right` — all load-bearing for the
 > tau-subagents extension (Esc deactivates strip nav / closes the viewer, Enter
 > opens/switches the viewer, arrows navigate the strip, each gated on an empty
