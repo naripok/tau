@@ -2,6 +2,58 @@
 >
 > USE AT YOUR OWN RISK!!!
 
+## Fork changes
+
+Everything below is relative to upstream `huggingface/tau` as of the latest
+upstream sync (`15f77f7`, 2026-08-16). Details live in `dev-notes/` (see
+[`dev-notes/tui-responsiveness-perf.md`](dev-notes/tui-responsiveness-perf.md)
+and [`dev-notes/auto-compact-percent.md`](dev-notes/auto-compact-percent.md)).
+
+### TUI responsiveness
+
+Six focused phases, all confined to `src/tau_coding/tui/` — the agent loop,
+provider layer, session format, and extension API are untouched:
+
+- **Ordinary prompt edits are essentially free** (~5 ms → ~15-40 µs per
+  keystroke). Session-index reads, shell-mode restyling, and empty autocomplete
+  redraws were removed from the per-keystroke path; `/resume` completions list
+  sessions once per interaction instead of once per character.
+- **Completion layout is measured once per render.** Wrapped heights are
+  memoized per item, so a 60-item menu dropped from ~250–860 ms to ~0.02–0.18 ms
+  per render with byte-identical output.
+- **`@file` completion scans the repo once per interaction** (3 s TTL cache per
+  working directory, cleared at interaction boundaries).
+- **Streamed Markdown is coalesced.** Provider deltas still update canonical
+  state instantly, but repaints are batched at a ~20 ms cadence, so typing
+  stays immediate while a model streams.
+- **Slash commands request a targeted refresh scope** (`NONE`/`CHROME`/`TRANSCRIPT`)
+  instead of rebuilding the whole transcript on every command.
+- **Dev-only slow-interceptor warning**: `TAU_DEBUG_TUI_PERF=1` times extension
+  key interceptors and logs any handler over 5 ms; production pays nothing.
+
+### UX adaptations
+
+- **`Ctrl+D` quit was removed.** Tau now binds no quit hotkey — login screens,
+  `/hotkeys` help, `tui.json` keybindings, and the extension interceptor's
+  reserved keys were all updated to match.
+- **`/system` output renders verbatim** in the transcript, so the XML-like
+  `<available_skills>` block is no longer mangled by the Markdown renderer.
+
+### Provider catalog
+
+- **Per-model `auto_compact_percent`** (integer 1–100) schedules automatic
+  compaction at a percentage of the model's context window, capped at the
+  provider-reported usable window when one is live. Threshold precedence:
+  `--auto-compact-threshold` flag → percentage → provider live limits →
+  built-in reserve.
+
+### Upstream sync
+
+- Forked from Tau `v0.3.10` and merged upstream `main` as of `15f77f7`
+  (2026-08-16), bringing in print-mode session resume, TUI tool batching and
+  compact bash invocations, resource-conflict startup alerts, and grouped write
+  calls.
+
 <p align="center">
   <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
 </p>
