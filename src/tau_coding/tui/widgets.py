@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -495,6 +497,14 @@ class TranscriptMessageWidget(Horizontal):
         return True
 
 
+_STREAM_FLUSH_INTERVAL = 0.02
+"""Minimum delay in seconds before a batch of streamed fragments is rendered.
+
+Keeps the Markdown re-parse/repaint rate independent of the provider's
+per-token delta rate while bounding how stale the visible stream can be.
+"""
+
+
 class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
     """One assistant or thinking Markdown block that accepts streamed fragments."""
 
@@ -528,6 +538,8 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         self.selection_text = item.text
         self._stream: MarkdownStream | None = None
         self._is_streaming = True
+        self._pending_fragments: list[str] = []
+        self._flush_task: asyncio.Task[object] | None = None
         super().__init__(item.text, theme=theme)
         self.add_class("transcript-message")
         self.add_class("-streaming")
@@ -549,10 +561,60 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
             return
         self.item.text += fragment
         self.selection_text += fragment
+        self._pending_fragments.append(fragment)
+        self._schedule_flush()
+
+    def _schedule_flush(self) -> None:
+        """Schedule one coalesced stream write if none is already pending."""
+        if self._flush_task is not None and not self._flush_task.done():
+            return
+        self._flush_task = asyncio.create_task(self._flush_after_delay())
+        self._flush_task.add_done_callback(self._flush_finished)
+
+    async def _flush_after_delay(self) -> None:
+        """Wait out the flush window, then write all pending fragments once."""
+        try:
+            await asyncio.sleep(_STREAM_FLUSH_INTERVAL)
+        finally:
+            self._flush_task = None  # guard against awaitable cancellation
+        await self._flush_pending()
+
+    async def _flush_pending(self) -> None:
+        """Write every pending fragment as one streamed markdown chunk."""
+        if not self._pending_fragments:
+            return
+        fragment = "".join(self._pending_fragments)
+        self._pending_fragments.clear()
         await self.stream.write(fragment)
 
+    def _flush_finished(self, task: asyncio.Task[object]) -> None:
+        """Drop the widget's reference to a finished flush task."""
+        if self._flush_task is task:
+            self._flush_task = None
+        if task.cancelled():
+            return
+        _ = task.exception()  # retrieved so asyncio never logs an unhandled failure
+
+    async def _flush_now(self) -> None:
+        """Cancel a scheduled flush and write all pending fragments immediately.
+
+        Called at every finalization point so no scheduled flush task can
+        outlive the stream and no fragment can be dropped. If the scheduled
+        task already started flushing, its write is interrupted and the pending
+        list it consumed is empty, so this direct flush only writes fragments
+        that arrived after the task's snapshot.
+        """
+        task = self._flush_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if self._flush_task is task:
+                self._flush_task = None
+        await self._flush_pending()
+
     async def _stop_stream(self) -> None:
-        """Stop the Textual markdown stream, flushing pending fragments first."""
+        """Flush pending fragments, then stop the Textual markdown stream."""
+        await self._flush_now()
         stream = self._stream
         if stream is None:
             return
@@ -580,8 +642,29 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         self.add_class("-finalized")
 
     async def on_unmount(self) -> None:
-        """Cancel the markdown stream task if the widget is removed mid-stream."""
-        await self._stop_stream()
+        """Cancel any scheduled flush and stop the stream if removed mid-stream.
+
+        Pending fragments are deliberately not flushed here: every removal path
+        (transcript window redraws, structured finalization) rebuilds the block
+        from the complete canonical item.text, and writing to a stream whose
+        widget Textual is tearing down can raise on a detached DOM. The
+        scheduled flush task is still cancelled so it can never outlive the
+        widget and write to a stopped stream.
+        """
+        task = self._flush_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if self._flush_task is task:
+                self._flush_task = None
+        stream = self._stream
+        if stream is None:
+            return
+        self._stream = None
+        with contextlib.suppress(Exception):
+            # The stream drains into a widget that may already be detached, and
+            # item.text remains the authoritative full text, so drop it safely.
+            await stream.stop()
 
     def get_selection(self, selection: Selection) -> tuple[str, str] | None:
         """Return selected text from this streamed message block."""

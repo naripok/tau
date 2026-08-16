@@ -2188,7 +2188,11 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh()
         MarkdownStream.write = original_stream_write  # type: ignore[method-assign]
 
     assert full_refreshes == 1
-    assert stream_writes == ["alpha ", "beta"]
+    # Streamed fragments are coalesced into a single Markdown write (see
+    # StreamingTranscriptMessageWidget), so the joined writes carry the full
+    # text and the write count stays below the fragment count.
+    assert "".join(stream_writes) == "alpha beta"
+    assert len(stream_writes) < 2
     assert stream_replacements == []
     assert full_stream_updates == []
     assert streamed.selection_text == "alpha beta"
