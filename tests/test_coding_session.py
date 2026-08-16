@@ -5119,10 +5119,7 @@ async def test_prompt_logs_turn_retry_diagnostics(tmp_path: Path) -> None:
     await _collect_session_events(session.prompt("Hello"))
 
     log_path = tau_paths.agent_calls_log_path
-    entries = [
-        json.loads(line)
-        for line in log_path.read_text(encoding="utf-8").splitlines()
-    ]
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     retry_entries = [entry for entry in entries if entry["kind"] == "assistant_retry"]
     error_entries = [entry for entry in entries if entry["kind"] == "assistant_error"]
     assert len(retry_entries) == 1
@@ -5162,10 +5159,7 @@ async def test_prompt_logs_exhausted_retries_and_terminal_error(tmp_path: Path) 
     await _collect_session_events(session.prompt("Hello"))
 
     log_path = tau_paths.agent_calls_log_path
-    entries = [
-        json.loads(line)
-        for line in log_path.read_text(encoding="utf-8").splitlines()
-    ]
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     retry_entries = [entry for entry in entries if entry["kind"] == "assistant_retry"]
     error_entries = [entry for entry in entries if entry["kind"] == "assistant_error"]
     assert len(retry_entries) == 2

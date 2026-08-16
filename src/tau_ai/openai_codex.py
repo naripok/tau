@@ -1094,6 +1094,3 @@ def _loads_object(value: str) -> dict[str, JSONValue] | None:
     if isinstance(loaded, dict):
         return loaded
     return None
-
-
-

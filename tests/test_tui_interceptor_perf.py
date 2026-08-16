@@ -129,8 +129,7 @@ def test_raising_interceptor_unchanged_under_debug(monkeypatch: pytest.MonkeyPat
     event = SimpleNamespace(key="x", character="x")
     assert app._run_extension_key_interceptors(event, "text") is False
     assert (
-        f"key_interceptor:{id(_raising_interceptor)}"
-        in app._extension_component_failures_reported
+        f"key_interceptor:{id(_raising_interceptor)}" in app._extension_component_failures_reported
     )
     # Raised immediately, so not slow: no perf warning expected.
     assert records == []

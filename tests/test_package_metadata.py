@@ -35,7 +35,9 @@ def test_current_version_has_release_notes() -> None:
     current = Version(pyproject["project"]["version"])
     # Fork-local versions (e.g. 0.3.10+naripok.1) inherit their base
     # version's release notes, so compare the PEP 440 public segment only.
-    assert any(Version(entry["version"]).base_version == current.base_version for entry in release_notes)
+    assert any(
+        Version(entry["version"]).base_version == current.base_version for entry in release_notes
+    )
 
 
 def test_wheel_includes_release_notes_package_data(tmp_path: Path) -> None:

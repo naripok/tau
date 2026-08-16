@@ -3527,9 +3527,7 @@ async def test_canonicalize_defaults_retryable_to_false() -> None:
     events = [
         event
         async for event in canonicalize_provider_stream(
-            _async_events(
-                [ProviderErrorEvent(message="invalid api key", data={"attempts": 1})]
-            ),
+            _async_events([ProviderErrorEvent(message="invalid api key", data={"attempts": 1})]),
             api="openai-completions",
             provider="openai",
             model="test-model",
@@ -3729,9 +3727,7 @@ async def test_openai_compatible_tail_read_completes_with_diagnostic() -> None:
     message = events[-1].message
     assert message.text == "done"
     assert message.stop_reason == "stop"
-    assert any(
-        diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
-    )
+    assert any(diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or [])
 
 
 @pytest.mark.anyio
@@ -3907,9 +3903,7 @@ async def test_anthropic_tail_read_completes_with_diagnostic() -> None:
     assert events[-1].type == "done"
     message = events[-1].message
     assert message.text == "done"
-    assert any(
-        diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
-    )
+    assert any(diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or [])
 
 
 @pytest.mark.anyio
@@ -4005,9 +3999,7 @@ async def test_openai_codex_tail_read_completes_with_diagnostic() -> None:
     assert events[-1].type == "done"
     message = events[-1].message
     assert "done" in message.text
-    assert any(
-        diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
-    )
+    assert any(diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or [])
 
 
 @pytest.mark.anyio

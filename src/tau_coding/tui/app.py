@@ -4323,9 +4323,7 @@ class TauTuiApp(App[None]):
                 result = interceptor(event, text)
             except Exception as exc:  # noqa: BLE001 - isolation boundary
                 if debug:
-                    self._warn_slow_key_interceptor(
-                        interceptor, time.perf_counter() - start
-                    )
+                    self._warn_slow_key_interceptor(interceptor, time.perf_counter() - start)
                 # Notify like the other failure classes so a broken interceptor
                 # is not silently invisible, and dedup per-interceptor so a
                 # second faulty handler still gets diagnosed.
@@ -4334,9 +4332,7 @@ class TauTuiApp(App[None]):
                 )
                 continue
             if debug:
-                self._warn_slow_key_interceptor(
-                    interceptor, time.perf_counter() - start
-                )
+                self._warn_slow_key_interceptor(interceptor, time.perf_counter() - start)
             if result:
                 return True
         return False
@@ -6371,9 +6367,7 @@ def _visible_completion_state(
     selected_index = state.selected_index
     item_count = len(items)
     selected_line_limit = max(max_lines - 1, 1)
-    extra_lines = [
-        _completion_item_extra_wrapped_lines(item, width=width) for item in items
-    ]
+    extra_lines = [_completion_item_extra_wrapped_lines(item, width=width) for item in items]
 
     # Prefix sums over the full item list, computed once: ``row_prefix[i]`` is
     # the row count (1 row plus wrapped extras) consumed by ``items[:i]``;

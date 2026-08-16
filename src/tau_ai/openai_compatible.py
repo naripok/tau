@@ -361,9 +361,8 @@ class OpenAICompatibleProvider:
                         # Every chunk was parsed and finalized before the tail
                         # read failed: the response is complete.
                         for index, parser_event in enumerate(final_events):
-                            if (
-                                index == len(final_events) - 1
-                                and isinstance(parser_event, ProviderResponseEndEvent)
+                            if index == len(final_events) - 1 and isinstance(
+                                parser_event, ProviderResponseEndEvent
                             ):
                                 parser_event = attach_tail_read_diagnostic(parser_event, exc)
                             yield parser_event
@@ -1399,6 +1398,3 @@ def _thinking_delta(delta: Mapping[str, Any]) -> tuple[str, str] | None:
         if isinstance(value, str) and value:
             return field_name, value
     return None
-
-
-

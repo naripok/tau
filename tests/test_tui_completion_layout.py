@@ -127,10 +127,7 @@ def _reference_visible_completion_state(
             items=state.items[reference_start:],
             selected_index=state.selected_index - reference_start,
         )
-        if (
-            _reference_completion_selected_render_line(candidate, width=width)
-            < selected_line_limit
-        ):
+        if _reference_completion_selected_render_line(candidate, width=width) < selected_line_limit:
             break
         reference_start += 1
 

@@ -189,9 +189,8 @@ class MistralConversationsProvider:
                 except httpx.HTTPError as exc:
                     if final_events is not None:
                         for index, parser_event in enumerate(final_events):
-                            if (
-                                index == len(final_events) - 1
-                                and isinstance(parser_event, ProviderResponseEndEvent)
+                            if index == len(final_events) - 1 and isinstance(
+                                parser_event, ProviderResponseEndEvent
                             ):
                                 parser_event = attach_tail_read_diagnostic(parser_event, exc)
                             yield parser_event

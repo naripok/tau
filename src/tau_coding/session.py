@@ -2114,15 +2114,13 @@ class CodingSession:
                                 )
                             )
                         if isinstance(retry_event, TurnRetryStartEvent):
-                            self._last_diagnostic_log_path = (
-                                self._diagnostic_logger.log_turn_retry(
-                                    context=context,
-                                    attempt=retry_event.attempt,
-                                    max_attempts=retry_event.max_attempts,
-                                    reason=retry_event.reason,
-                                    error_message=retry_event.error_message,
-                                    error_type=retry_event.error_type,
-                                )
+                            self._last_diagnostic_log_path = self._diagnostic_logger.log_turn_retry(
+                                context=context,
+                                attempt=retry_event.attempt,
+                                max_attempts=retry_event.max_attempts,
+                                reason=retry_event.reason,
+                                error_message=retry_event.error_message,
+                                error_type=retry_event.error_type,
                             )
                         if isinstance(retry_event, AgentEndEvent):
                             yield SessionAgentEndEvent(

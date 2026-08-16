@@ -60,9 +60,7 @@ async def test_rapid_fragments_coalesce_into_a_single_flush(
     canonical item.text and selection_text are complete immediately, and the
     flattened stream writes equal the full message.
     """
-    widget, fake = _streaming_widget_with_fake_stream(
-        monkeypatch, flush_interval=0.5
-    )
+    widget, fake = _streaming_widget_with_fake_stream(monkeypatch, flush_interval=0.5)
 
     for character in _RAPID_FRAGMENTS:
         await widget.append_fragment(character)
@@ -88,9 +86,7 @@ async def test_finalize_flushes_pending_fragments_before_stopping(
     written to the stream and the finalized marker state is set even when the
     flush window never elapses.
     """
-    widget, fake = _streaming_widget_with_fake_stream(
-        monkeypatch, flush_interval=0.5
-    )
+    widget, fake = _streaming_widget_with_fake_stream(monkeypatch, flush_interval=0.5)
 
     await widget.append_fragment("Hello")
     await widget.finalize()
@@ -116,9 +112,7 @@ async def test_on_unmount_cancels_pending_flush_and_stops_stream(
     on_unmount must not crash, must not leak the scheduled flush task, and must
     stop the Textual stream so its background task cannot outlive the widget.
     """
-    widget, fake = _streaming_widget_with_fake_stream(
-        monkeypatch, flush_interval=0.5
-    )
+    widget, fake = _streaming_widget_with_fake_stream(monkeypatch, flush_interval=0.5)
     tasks_before = {task for task in asyncio.all_tasks()}
 
     await widget.append_fragment("Hel")
@@ -149,9 +143,7 @@ async def test_replace_text_flushes_pending_before_replacing(
     in the widget: the flush runs inside the stop path before the replacement
     text is rendered, and the canonical text becomes the replacement.
     """
-    widget, fake = _streaming_widget_with_fake_stream(
-        monkeypatch, flush_interval=0.5
-    )
+    widget, fake = _streaming_widget_with_fake_stream(monkeypatch, flush_interval=0.5)
     replaced_texts: list[str] = []
 
     async def tracking_update(self: StreamingTranscriptMessageWidget, text: str) -> None:
