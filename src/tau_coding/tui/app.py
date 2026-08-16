@@ -122,7 +122,7 @@ from tau_coding.provider_config import (
     upsert_saved_provider,
 )
 from tau_coding.provider_runtime import create_model_provider
-from tau_coding.resources import TauResourcePaths
+from tau_coding.resources import ResourceDiagnostic, TauResourcePaths
 from tau_coding.session import (
     TREE_RUNNING_MESSAGE,
     CodingSession,
@@ -2974,8 +2974,13 @@ class TauTuiApp(App[None]):
         border: none;
     }
 
-    #sidebar-content {
+    #sidebar-scroll {
         height: 1fr;
+        scrollbar-size-vertical: 1;
+    }
+
+    #sidebar-content {
+        height: auto;
     }
 
     #sidebar-brand {
@@ -3518,6 +3523,7 @@ class TauTuiApp(App[None]):
         startup_message: str | None = None,
         startup_notice: str | None = None,
         startup_update_notice: str | None = None,
+        startup_alerts: Sequence[str] = (),
         startup_notices: Sequence[str] = (),
         initial_prompt: str | None = None,
     ) -> None:
@@ -3540,6 +3546,8 @@ class TauTuiApp(App[None]):
         self.state = TuiState(skills=session.skills)
         if startup_update_notice is not None:
             self.state.add_item("status", startup_update_notice, highlight="update")
+        for alert in startup_alerts:
+            self.state.add_item("status", alert, highlight="alert")
         for notice in self.startup_notices:
             self.state.add_item("status", notice)
         if self.tui_settings.theme != self.tui_settings.resolved_theme.name:
@@ -4959,13 +4967,23 @@ class TauTuiApp(App[None]):
             return
         if isinstance(event, ToolExecutionStartEvent):
             await transcript.finish_assistant_message()
-            item = self.state.items[-1]
-            await transcript.append_item(
-                item,
-                theme=theme,
-                show_tool_results=self.state.show_tool_results,
-                invocation=self.state.resolve_tool_invocation(item),
-            )
+            item = self.state.find_tool_item(event.tool_call_id)
+            if item is not None:
+                expanded = self.state.show_tool_results or item.always_show_tool_result
+                updated = await transcript.update_item(
+                    item,
+                    theme=theme,
+                    show_tool_results=expanded,
+                    invocation=self.state.resolve_tool_invocation(item, expanded=expanded),
+                    result_markup=self.state.resolve_tool_result(item, expanded=expanded),
+                )
+                if not updated:
+                    await transcript.append_item(
+                        item,
+                        theme=theme,
+                        show_tool_results=expanded,
+                        invocation=self.state.resolve_tool_invocation(item, expanded=expanded),
+                    )
             self._refresh_chrome()
             return
         if isinstance(event, ToolExecutionUpdateEvent):
@@ -4977,7 +4995,7 @@ class TauTuiApp(App[None]):
                     updated_item,
                     theme=theme,
                     show_tool_results=expanded,
-                    invocation=self.state.resolve_tool_invocation(updated_item),
+                    invocation=self.state.resolve_tool_invocation(updated_item, expanded=expanded),
                     result_markup=self.state.resolve_tool_result(updated_item, expanded=expanded),
                 )
             self._refresh_chrome()
@@ -5008,7 +5026,7 @@ class TauTuiApp(App[None]):
                     updated_item,
                     theme=theme,
                     show_tool_results=expanded,
-                    invocation=self.state.resolve_tool_invocation(updated_item),
+                    invocation=self.state.resolve_tool_invocation(updated_item, expanded=expanded),
                     result_markup=self.state.resolve_tool_result(updated_item, expanded=expanded),
                 )
             self._refresh_chrome()
@@ -5335,9 +5353,8 @@ class TauTuiApp(App[None]):
 
     def action_toggle_tool_results(self) -> None:
         """Toggle inline tool result details without rebuilding unrelated history."""
-        expanded = self.state.toggle_tool_results()
+        self.state.toggle_tool_results()
         self.run_worker(self._update_tool_results_visibility(), exclusive=False)
-        self._notify("Tool results expanded." if expanded else "Tool results collapsed.")
 
     async def _update_tool_results_visibility(self) -> None:
         transcript = self.query_one("#transcript", TranscriptView)
@@ -6022,7 +6039,7 @@ class TauTuiApp(App[None]):
             item,
             theme=self.tui_settings.resolved_theme,
             show_tool_results=expanded,
-            invocation=self.state.resolve_tool_invocation(item),
+            invocation=self.state.resolve_tool_invocation(item, expanded=expanded),
             result_markup=self.state.resolve_tool_result(item, expanded=expanded),
         )
 
@@ -7150,6 +7167,33 @@ def _usable_scoped_startup_choices(settings: Any) -> tuple[ModelChoice, ...]:
     return tuple(choices)
 
 
+def _resource_conflict_alert(
+    diagnostics: Sequence[ResourceDiagnostic],
+) -> str | None:
+    """Format skill and prompt precedence conflicts as one startup alert."""
+    prefix = "overrides lower-precedence resource at "
+    conflicts = [
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.kind in {"skill", "prompt"}
+        and diagnostic.name is not None
+        and diagnostic.path is not None
+        and diagnostic.message.startswith(prefix)
+    ]
+    if not conflicts:
+        return None
+
+    lines = ["Conflicting skills/prompts detected:"]
+    for diagnostic in conflicts:
+        resource_kind = "skill" if diagnostic.kind == "skill" else "prompt template"
+        shadowed_path = diagnostic.message.removeprefix(prefix)
+        lines.append(
+            f"- {resource_kind} '{diagnostic.name}': {diagnostic.path} overrides {shadowed_path}"
+        )
+    lines.append("Rename or remove duplicate resources to clear this alert.")
+    return "\n".join(lines)
+
+
 def _startup_inference_provider(
     selection: ProviderSelection,
     record: CodingSessionRecord | None,
@@ -7285,11 +7329,16 @@ async def run_tui_app(
         all_startup_notices = tuple(
             (*error_notices, *startup_notices, *legacy_notices, *theme_notices)
         )
+        resource_conflict_alert = _resource_conflict_alert(
+            getattr(session, "resource_diagnostics", ())
+        )
+        startup_alerts = (resource_conflict_alert,) if resource_conflict_alert is not None else ()
         app = TauTuiApp(
             session,
             tui_settings=load_tui_settings(),
             startup_message=startup_message,
             startup_update_notice=startup_update_notice,
+            startup_alerts=startup_alerts,
             startup_notices=all_startup_notices,
             initial_prompt=initial_prompt,
         )
