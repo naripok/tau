@@ -108,18 +108,23 @@ message, and SHALL NOT trigger a retry.
 #### Requirement: Bounded turn-level retry
 
 When a main-turn provider call fails with a retryable classification, the
-number of completed attempts is below the configured retry budget, and the run
-is not cancelled, the harness SHALL discard the failed attempt's partial output
-without appending it to history or storage, SHALL NOT surface the failed
-attempt as an error to consumers, SHALL emit a retry-start event
-carrying the next attempt number, the maximum attempts, the backoff delay, and
-the failure reason, SHALL wait the backoff delay in a cancellable manner, and
-SHALL reissue the provider call with the same request context. Reattempts
-SHALL repeat until a call completes normally, the failure is no longer
-retryable, the budget is exhausted, or the run is cancelled.
+number of reattempts already performed for the turn is below the configured
+retry budget, and the run is not cancelled, the harness SHALL discard the
+failed attempt's partial output without appending it to history or storage,
+SHALL NOT surface the failed attempt as an error to consumers, SHALL emit a
+retry-start event carrying the next attempt number, the maximum attempts, the
+backoff delay, and the failure reason, SHALL wait the backoff delay in a
+cancellable manner, and SHALL reissue the provider call with the same request
+context. Reattempts SHALL repeat until a call completes normally, the failure
+is no longer retryable, the budget is exhausted, or the run is cancelled.
 
-The backoff delay SHALL grow with each successive attempt and SHALL never
-exceed a fixed maximum cap; the first delay SHALL be a fixed base value.
+The retry-start event and its notice SHALL number attempts counting the
+original request as the first attempt, so with the default budget of two
+retries the total attempt count is three.
+
+The backoff delay SHALL grow with each successive attempt until it reaches a
+fixed maximum cap and SHALL never exceed that cap; the first delay SHALL be a
+fixed base value.
 
 ##### Scenario: failure followed by success
 
@@ -195,20 +200,29 @@ retries.
 
 #### Requirement: Cancellation during retry
 
-When the run is cancelled during a retry backoff delay or during a reattempt,
-the harness SHALL NOT reissue further attempts, SHALL append the in-flight
-attempt's message and end the run exactly as it does today when a stream is
-cancelled mid-flight, and SHALL emit no retry-start events after the
-cancellation. When a reattempt is cancelled mid-flight, the mounted retry
-notice and the reattempt's partial content SHALL be finalized into the same
-terminal projection today's cancelled-stream behavior produces.
+When the run is cancelled during a retry backoff delay, the harness SHALL NOT
+reissue further attempts, SHALL surface the failure as a terminal error
+exactly as it does when the retry budget is exhausted (failed message appended
+and the run ended), SHALL write the terminal error entry in the diagnostics
+log, and SHALL emit no retry-start events after the cancellation. The mounted
+retry notice SHALL be replaced by that terminal error projection, and the
+failed attempt's discarded partial content SHALL NOT be restored.
+
+When the run is cancelled during a reattempt, the harness SHALL NOT reissue
+further attempts, SHALL append the in-flight attempt's message and end the run
+exactly as it does today when a stream is cancelled mid-flight, and SHALL emit
+no retry-start events after the cancellation. The mounted retry notice and the
+reattempt's partial content SHALL be finalized into the same terminal
+projection today's cancelled-stream behavior produces.
 
 ##### Scenario: cancel during backoff
 
 - GIVEN a retryable failure is waiting out its backoff delay
 - WHEN the user cancels the run
-- THEN no further attempts occur and the run ends with today's terminal error
-  behavior.
+- THEN no further attempts occur, the failure is surfaced as a terminal error
+  exactly as when the budget is exhausted, the transcript shows the terminal
+  error projection with no lingering retry notice, and the discarded partial
+  content is not restored.
 
 ##### Scenario: cancel during a reattempt
 
