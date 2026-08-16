@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from pi_event_helpers import text_delta
 from tau_agent import (
     AgentToolResult,
     AssistantMessage,
@@ -13,6 +14,7 @@ from tau_agent import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
+    TurnRetryStartEvent,
 )
 from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
 from tau_coding.events import AutoRetryStartEvent, QueueUpdateEvent
@@ -196,3 +198,34 @@ def test_json_renderer_emits_canonical_jsonl(capsys: pytest.CaptureFixture[str])
     assert lines[2]["assistantMessageEvent"]["type"] == "thinking_delta"
     assert lines[3]["message"]["stopReason"] == "error"
     assert renderer.finish() is False
+
+
+def test_transcript_renderer_prints_turn_retry_notice(capsys: pytest.CaptureFixture[str]) -> None:
+    """Prove print mode reports a retry without failing the final output."""
+    renderer = TranscriptRenderer(custom_message_renderer=None)
+    renderer.render(
+        MessageUpdateEvent(
+            message=AssistantMessage(content="partial"),
+            assistant_message_event=text_delta("partial"),
+        )
+    )
+    renderer.render(
+        TurnRetryStartEvent(
+            attempt=2,
+            max_attempts=3,
+            delay_seconds=0.25,
+            reason="network error (RemoteProtocolError)",
+            error_message="peer closed connection",
+        )
+    )
+    renderer.render(
+        MessageUpdateEvent(
+            message=AssistantMessage(content="done"),
+            assistant_message_event=text_delta("done"),
+        )
+    )
+    renderer.render(MessageEndEvent(message=AssistantMessage(content="done", model="fake")))
+
+    captured = capsys.readouterr()
+    assert "retrying 2/3" in captured.err
+    assert "Error" not in captured.err

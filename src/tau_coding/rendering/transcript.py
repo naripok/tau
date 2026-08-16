@@ -11,6 +11,7 @@ from tau_agent.events import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
+    TurnRetryStartEvent,
 )
 from tau_agent.messages import AssistantMessage, CustomMessage, ToolCall
 from tau_ai.events import TextDeltaEvent
@@ -52,6 +53,16 @@ class TranscriptRenderer:
         if isinstance(event, AutoRetryStartEvent):
             self._newline()
             self._console.print(Text(f"… {event.error_message}", style="bright_black"))
+            return
+        if isinstance(event, TurnRetryStartEvent):
+            self._newline()
+            self._console.print(
+                Text(
+                    f"… Connection lost — retrying {event.attempt}/{event.max_attempts}: "
+                    f"{event.reason}",
+                    style="bright_black",
+                )
+            )
             return
         if isinstance(event, ToolExecutionEndEvent):
             status = "✗" if event.is_error else "✓"
