@@ -69,6 +69,7 @@ from tau_coding.catalog_loader import save_user_catalog_entries
 from tau_coding.commands import (
     LOGIN_PROVIDER_ALIASES,
     CommandRegistry,
+    CommandResult,
     create_default_command_registry,
     format_reload_summary,
 )
@@ -3979,7 +3980,7 @@ class TauTuiApp(App[None]):
                         command.export_destination,
                         format=command.export_format,
                     )
-                    self._append_command_message(
+                    await self._append_command_message(
                         text,
                         f"Exported session to {exported_path}",
                     )
@@ -4027,10 +4028,14 @@ class TauTuiApp(App[None]):
                 if _command_message_uses_notification(text, command.message):
                     self._notify(command.message)
                 elif _command_message_uses_transcript(text):
-                    self._append_command_message(text, command.message)
+                    await self._append_command_message(text, command.message)
                 else:
                     self._show_command_message(text, command.message)
-            self._refresh()
+            scope = _handled_command_refresh_scope(text, command)
+            if scope is RefreshScope.TRANSCRIPT:
+                self._refresh()
+            elif scope is RefreshScope.CHROME:
+                self._refresh_chrome()
             if command.exit_requested:
                 self.exit()
             return
@@ -5425,9 +5430,26 @@ class TauTuiApp(App[None]):
             return None
         return item.apply(value)
 
-    def _append_command_message(self, command_text: str, message: str) -> None:
-        """Append non-persistent command output to the visible transcript."""
+    async def _append_command_message(self, command_text: str, message: str) -> None:
+        """Append non-persistent command output to the transcript incrementally.
+
+        Adds the status item to state, then mounts a single transcript block
+        via ``TranscriptView.append_item`` instead of rebuilding the whole
+        transcript (the ``_run_terminal_command`` precedent). The handler
+        dispatches its computed refresh scope afterward, so the item stays
+        visible even when that scope is only chrome.
+        """
+        item_index = len(self.state.items)
         self.state.add_item("status", f"{_command_output_title(command_text)}\n{message}")
+        item = self.state.items[item_index]
+        self._follow_transcript_output()
+        transcript = self.query_one("#transcript", TranscriptView)
+        await transcript.append_item(
+            item,
+            theme=self.tui_settings.resolved_theme,
+            show_tool_results=self.state.show_tool_results,
+            scroll_end=True,
+        )
 
     def _show_command_message(self, command_text: str, message: str) -> None:
         self.push_screen(
@@ -6571,6 +6593,63 @@ def _named_session_title(title: str | None) -> str | None:
 
 def _login_provider_label(provider: ProviderCatalogEntry) -> str:
     return f"{provider.display_name} — {provider.name}"
+
+
+class RefreshScope(Enum):
+    """Refresh width granted to a handled slash command.
+
+    Handled commands used to end with an unconditional ``_refresh()``, which
+    rebuilds the whole transcript by remounting every block — pure overhead for
+    pickers, notifications, and messages rendered on their own screens. Each
+    command now requests the narrowest scope it needs and the handler
+    dispatches it exactly once at the end of the handled-command branch:
+
+    - ``TRANSCRIPT``: full ``_refresh()``. Transcript-worthy state changed in
+      the branch (``clear_requested``) or the session's resources were swapped
+      (``reload_requested``; skills feed the sidebar and skill completions).
+    - ``CHROME``: ``_refresh_chrome()`` only. Session metadata visible in the
+      chrome changed (``/name`` rename, explicit ``/model <name>`` switch), or
+      a command message was appended to the transcript incrementally
+      (``/reload``, ``/system``, ``/export``).
+    - ``NONE``: no refresh here. Pickers and modals push screens of their own
+      and refresh on selection; notifications toast by themselves; helpers that
+      already refresh internally (``_new_session``, ``_resume_session``,
+      ``_set_tui_theme``, ``_set_thinking_level``/``_cycle_thinking_level``,
+      ``_run_compaction``, ``_logout``) must not be refreshed again here, or a
+      command would rebuild the transcript twice.
+    """
+
+    NONE = auto()
+    CHROME = auto()
+    TRANSCRIPT = auto()
+
+
+def _handled_command_refresh_scope(text: str, command: CommandResult) -> RefreshScope:
+    """Return the single refresh scope a handled command needs.
+
+    ``TRANSCRIPT`` covers the only in-branch mutations that rewrite the visible
+    transcript wholesale (``clear_requested``) or swap the session's resources
+    (``reload_requested``; after the reload, ``state.set_skills`` runs and the
+    reload summary is appended incrementally, then this one full rebuild
+    renders both with the updated skills). ``CHROME`` covers session-metadata
+    changes that live in the sidebar/terminal title (``/name`` renames,
+    explicit ``/model <name>`` switches) and messages appended to the
+    transcript incrementally. Every other handled command — pickers, modals,
+    screen messages, notifications, exit — needs nothing from the handler.
+    """
+    if command.clear_requested or command.reload_requested:
+        return RefreshScope.TRANSCRIPT
+    if command.export_requested:
+        return RefreshScope.CHROME
+    if command.message is None:
+        return RefreshScope.NONE
+    if (
+        _command_message_uses_transcript(text)
+        or _command_message_uses_notification(text, command.message)
+        or text.split(maxsplit=1)[0].casefold() == "/model"
+    ):
+        return RefreshScope.CHROME
+    return RefreshScope.NONE
 
 
 def _subscription_login_providers(
