@@ -32,6 +32,7 @@ from tau_coding.tui.app import (
     SessionPickerScreen,
     TauTuiApp,
     ThemePickerScreen,
+    _command_message_uses_plain_text,
 )
 from tau_coding.tui.widgets import TranscriptView
 from test_tui_app import FakeSession
@@ -405,9 +406,7 @@ async def test_tui_refresh_resume_command_refreshes_exactly_once_from_helper() -
         assert session.resumed_session_ids == ["session-1"]
         assert full_counts[0] == 1
         assert chrome_counts[0] == 1
-        assert [(item.role, item.text) for item in app.state.items] == [
-            ("user", "Restored prompt")
-        ]
+        assert [(item.role, item.text) for item in app.state.items] == [("user", "Restored prompt")]
         assert "Restored prompt" in _transcript_text(app)
 
 
@@ -544,6 +543,20 @@ async def test_tui_refresh_explicit_model_switch_refreshes_chrome_only() -> None
 
 
 # --- sanity: scope dispatch is once per combined command ---------------------
+
+
+def test_command_message_uses_plain_text_classifies_system_output() -> None:
+    """Prove only /system opts into verbatim plain-text transcript output.
+
+    /system emits the raw system prompt, whose XML-like <available_skills>
+    block Textual's Markdown renderer would mangle (swallowing the inner
+    <skill>/<name>/<description>/<location> tags). Other transcript commands
+    such as /reload keep Markdown rendering.
+    """
+    assert _command_message_uses_plain_text("/system")
+    assert _command_message_uses_plain_text("/system  ")
+    assert not _command_message_uses_plain_text("/reload")
+    assert not _command_message_uses_plain_text("/skills")
 
 
 @pytest.mark.anyio

@@ -5480,7 +5480,11 @@ class TauTuiApp(App[None]):
         visible even when that scope is only chrome.
         """
         item_index = len(self.state.items)
-        self.state.add_item("status", f"{_command_output_title(command_text)}\n{message}")
+        self.state.add_item(
+            "status",
+            f"{_command_output_title(command_text)}\n{message}",
+            plain_text=_command_message_uses_plain_text(command_text),
+        )
         item = self.state.items[item_index]
         self._follow_transcript_output()
         transcript = self.query_one("#transcript", TranscriptView)
@@ -6777,6 +6781,18 @@ def _command_message_uses_transcript(command_text: str) -> bool:
     """Return whether slash-command output should appear inline in the transcript."""
     command_name = command_text.split(maxsplit=1)[0].casefold()
     return command_name in {"/reload", "/system"}
+
+
+def _command_message_uses_plain_text(command_text: str) -> bool:
+    """Return whether inline command output renders verbatim, not as Markdown.
+
+    /system dumps the raw system prompt, whose XML-like <available_skills>
+    block Textual's Markdown renderer would mangle (inner skill tags are
+    swallowed, concatenating path, name, and frontmatter description onto one
+    line). Plain rendering keeps every field on its own line.
+    """
+    command_name = command_text.split(maxsplit=1)[0].casefold()
+    return command_name == "/system"
 
 
 def _command_message_uses_notification(command_text: str, message: str) -> bool:

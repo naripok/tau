@@ -51,6 +51,10 @@ class ChatItem:
     tool_arguments: dict[str, JSONValue] | None = None
     started_at: float | None = None
     always_show_tool_result: bool = False
+    # Opt out of Markdown rendering: the item text is displayed verbatim with
+    # newlines preserved (used for /system output, whose XML-like
+    # <available_skills> block the Markdown renderer would otherwise mangle).
+    plain_text: bool = False
     custom_type: str | None = None
     details: dict[str, JSONValue] | None = None
     highlight: Literal["update"] | None = None
@@ -87,6 +91,7 @@ class TuiState:
         tool_call_id: str | None = None,
         tool_result_text: str | None = None,
         always_show_tool_result: bool = False,
+        plain_text: bool = False,
         custom_type: str | None = None,
         details: dict[str, JSONValue] | None = None,
         highlight: Literal["update"] | None = None,
@@ -98,6 +103,7 @@ class TuiState:
             tool_call_id=tool_call_id,
             tool_result_text=tool_result_text,
             always_show_tool_result=always_show_tool_result,
+            plain_text=plain_text,
             custom_type=custom_type,
             details=details,
             highlight=highlight,

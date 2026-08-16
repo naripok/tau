@@ -1082,6 +1082,79 @@ def test_transcript_plain_tool_body_renders_patch_as_colored_diff() -> None:
     assert re.search(r"\x1b\[92;[^m]*m\+new", styled)
 
 
+SYSTEM_PROMPT_SKILLS_XML = """<available_skills>
+  <skill>
+    <name>brainstorming</name>
+    <description>Use before any creative work.</description>
+    <location>/home/tau/.tau/skills/brainstorming/SKILL.md</location>
+  </skill>
+  <skill>
+    <name>brandkit</name>
+    <description>Premium brand-kit image generation.</description>
+    <location>/home/tau/.tau/skills/brandkit/SKILL.md</location>
+  </skill>
+</available_skills>"""
+
+
+def test_plain_text_status_item_keeps_skill_xml_blocks_verbatim() -> None:
+    """Prove /system output renders raw so every skill field stays on its own line.
+
+    The transcript renders status items as Markdown by default, and the Markdown
+    parser treats the <skill>/<name>/<description>/<location> tags as inline
+    HTML - swallowing the tags and concatenating the path, name, and frontmatter
+    description onto a single line. Items flagged ``plain_text`` must bypass
+    Markdown so the system prompt's <available_skills> block stays readable
+    with one field per line.
+    """
+    item = ChatItem(role="status", text=f"/system\n{SYSTEM_PROMPT_SKILLS_XML}", plain_text=True)
+
+    console = Console(record=True, width=120, color_system="truecolor")
+    console.print(render_chat_item(item))
+
+    output = console.export_text(clear=False)
+    assert "<available_skills>" in output
+    assert "<skill>" in output
+    assert "<name>brainstorming</name>" in output
+    assert "<name>brandkit</name>" in output
+    assert "<location>/home/tau/.tau/skills/brandkit/SKILL.md</location>" in output
+    # The name and path fields must never share one line (the path legitimately
+    # contains the skill name as a directory component, so compare tags, not
+    # substrings).
+    assert not any("<name>" in line and "<location>" in line for line in output.splitlines())
+
+
+def test_status_item_without_plain_text_flag_still_mangles_skill_xml() -> None:
+    """Pin the pre-fix behavior so the plain_text regression guard keeps its teeth.
+
+    Markdown rendering is intentionally left intact for ordinary status items;
+    this test documents that without the ``plain_text`` flag the inner skill
+    tags are still swallowed by the Markdown renderer (the /system bug this
+    phase fixes).
+    """
+    item = ChatItem(role="status", text=f"/system\n{SYSTEM_PROMPT_SKILLS_XML}")
+
+    console = Console(record=True, width=120, color_system="truecolor")
+    console.print(render_chat_item(item))
+
+    output = console.export_text(clear=False)
+    assert "<skill>" not in output
+
+
+def test_status_item_plain_text_flag_defaults_to_false() -> None:
+    """Prove the plain-text opt-in never changes existing transcript items.
+
+    Only command output that opts in via ``TuiState.add_item(plain_text=True)``
+    bypasses Markdown rendering; every other status item keeps the previous
+    Markdown behavior.
+    """
+    state = TuiState()
+    state.add_item("status", "plain", plain_text=True)
+    state.add_item("status", "markdown")
+
+    assert state.items[0].plain_text is True
+    assert state.items[1].plain_text is False
+
+
 def test_thinking_chat_items_use_distinct_style_and_markdown() -> None:
     console = Console(record=True, width=80)
 
@@ -5887,7 +5960,11 @@ async def test_tui_app_system_appends_command_output_to_transcript() -> None:
         await pilot.pause()
 
         assert not isinstance(app.screen, CommandOutputScreen)
-        assert app.state.items == [ChatItem(role="status", text="/system\nYou are Tau.")]
+        # /system output opts into plain-text rendering so the system prompt's
+        # XML-like skills block is not mangled by the Markdown renderer.
+        assert app.state.items == [
+            ChatItem(role="status", text="/system\nYou are Tau.", plain_text=True)
+        ]
 
 
 @pytest.mark.anyio

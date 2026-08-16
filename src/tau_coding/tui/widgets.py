@@ -1442,7 +1442,11 @@ def _split_rich_style_colors(style: str) -> tuple[str | None, str | None]:
 
 def _use_plain_transcript_body(item: ChatItem) -> bool:
     """Return whether a transcript item can use fast selectable plain text."""
-    return item.highlight == "update" or item.role in {"user", "tool", "skill", "error"}
+    return (
+        item.plain_text
+        or item.highlight == "update"
+        or item.role in {"user", "tool", "skill", "error"}
+    )
 
 
 def _transcript_plain_body_text(
@@ -1702,8 +1706,9 @@ def render_chat_item(
             body_style=role_style.body,
         )
     else:
-        body = (
-            _render_tool_chat_body(
+        visible_text = _visible_chat_text(item, show_tool_results=show_tool_results)
+        if item.role == "tool":
+            body = _render_tool_chat_body(
                 item,
                 body_style=theme.role_styles["tool"].body,
                 accent_style=_tool_accent_style(item, theme=theme),
@@ -1711,15 +1716,16 @@ def render_chat_item(
                 syntax_theme=theme.syntax_theme,
                 theme=theme,
             )
-            if item.role == "tool"
-            else _render_chat_body(
-                _visible_chat_text(item, show_tool_results=show_tool_results),
+        elif item.plain_text:
+            body = _plain_text(visible_text, body_style=role_style.body)
+        else:
+            body = _render_chat_body(
+                visible_text,
                 role=item.role,
                 body_style=role_style.body,
                 syntax_theme=theme.syntax_theme,
                 theme=theme,
             )
-        )
     table = Table.grid(expand=True)
     table.add_column(width=1, style=role_style.border)
     table.add_column(ratio=1, style=role_style.body)
