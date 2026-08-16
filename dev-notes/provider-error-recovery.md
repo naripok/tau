@@ -31,8 +31,11 @@ The fix preserves Tau's layer boundaries:
 
 Only empty `error` and `aborted` assistant turns are filtered. A failed message
 with text, thinking, or tool-call content remains in provider context for now so
-this focused fix does not silently discard a partial response. A broader policy
-for partially failed turns and unmatched tool calls can be handled separately.
+this focused fix does not silently discard a partial response. Partially failed
+turns are now handled by the turn-level transient retry described in
+[`transient-error-retry.md`](2026-08-16-transient-error-retry.md): retryable
+drops after partial content are retried invisibly with the partial discarded,
+and only exhausted or non-retryable failures reach this projection path.
 
 ## How to test
 

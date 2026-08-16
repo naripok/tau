@@ -255,7 +255,8 @@ Provider preferences live in `~/.tau/providers.json`:
       "thinking_defaults": { "qwen-coder": "low" },
       "timeout_seconds": 120,
       "max_retries": 2,
-      "max_retry_delay_seconds": 0.5
+      "max_retry_delay_seconds": 0.5,
+      "turn_retry_max": 2
     }
   },
   "scoped_models": [
@@ -283,13 +284,18 @@ Provider preferences live in `~/.tau/providers.json`:
   [`tau-huggingface`](https://github.com/alejandro-ao/tau-huggingface) extension;
   clone it and launch Tau with `tau -e ./tau-huggingface`.
   `timeout_seconds` defaults to `60` (> 0); `max_retries`
-  defaults to `2`; `max_retry_delay_seconds` defaults to `1` (both ≥ 0).
+  defaults to `2`; `max_retry_delay_seconds` defaults to `1` (both ≥ 0);
+  `turn_retry_max` defaults to `2` (≥ 0, `0` disables turn-level retries).
   Retries cover transient HTTP statuses (`408`, `409`, `425`, `429`, `5xx`),
   transport errors, and transient in-stream SSE errors that arrive on an
   otherwise successful HTTP 200 response. Anthropic retries `api_error`,
   `overloaded_error`, and `rate_limit_error`; OpenAI Codex retries transient
-  events such as `server_is_overloaded`. In-stream errors remain terminal after
-  partial content to prevent duplicate output or tool calls.
+  events such as `server_is_overloaded`. Non-transient failures (usage limits,
+  context overflow, cancellation) are never retried. When a failure outlives
+  the adapter retries — including drops after partial output — Tau retries the
+  whole turn up to `turn_retry_max` more times, discarding the failed
+  attempt's partial output and showing a transient “Connection lost —
+  retrying” notice; only exhausted retries project the terminal error.
 - API keys and OAuth credentials are **not** stored here — they live in
   `~/.tau/credentials.json` (private but not encrypted). OAuth objects may contain
   provider metadata such as a GitHub Enterprise domain and are refreshed
