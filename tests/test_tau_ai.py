@@ -26,6 +26,7 @@ from tau_ai import (
     AssistantStartEvent,
     FakeProvider,
     GoogleGenerativeAIProvider,
+    MistralConversationsProvider,
     OpenAICodexConfig,
     OpenAICodexCredentials,
     OpenAICodexProvider,
@@ -3650,7 +3651,12 @@ async def test_openai_compatible_quota_429_is_not_retryable() -> None:
         requests.append(request)
         return httpx.Response(
             429,
-            json={"error": {"code": "insufficient_quota", "message": "You have insufficient quota."}},
+            json={
+                "error": {
+                    "code": "insufficient_quota",
+                    "message": "You have insufficient quota.",
+                }
+            },
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -4002,3 +4008,136 @@ async def test_openai_codex_tail_read_completes_with_diagnostic() -> None:
     assert any(
         diagnostic.type == "response_tail_read" for diagnostic in message.diagnostics or []
     )
+
+
+@pytest.mark.anyio
+async def test_google_marks_mid_stream_transport_drop_retryable() -> None:
+    """Prove a Google transport drop after content is classified retryable."""
+    requests: list[httpx.Request] = []
+
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            # A real mid-stream drop happens before the terminal finish-reason
+            # chunk arrives, so the partial chunk carries no finishReason.
+            yield b'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}\n\n'
+            raise httpx.ReadError("stream dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=FailingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = GoogleGenerativeAIProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://generativelanguage.googleapis.com/v1beta",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
+
+
+@pytest.mark.anyio
+async def test_google_tail_read_completes_with_diagnostic() -> None:
+    """Prove a Google drop after the last chunk completes the message."""
+    requests: list[httpx.Request] = []
+
+    class TailDroppingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield (
+                b'data: {"candidates":[{"content":{"parts":[{"text":"done"}]},'
+                b'"finishReason":"STOP"}]}\n\n'
+            )
+
+        async def aclose(self) -> None:
+            raise httpx.ReadError("tail dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=TailDroppingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = GoogleGenerativeAIProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://generativelanguage.googleapis.com/v1beta",
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert events[-1].type == "done"
+    assert any(
+        diagnostic.type == "response_tail_read"
+        for diagnostic in events[-1].message.diagnostics or []
+    )
+
+
+@pytest.mark.anyio
+async def test_mistral_marks_mid_stream_drop_retryable() -> None:
+    """Prove a Mistral transport drop after content is classified retryable."""
+    requests: list[httpx.Request] = []
+
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+            raise httpx.ReadError("stream dropped")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            stream=FailingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = MistralConversationsProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://api.mistral.ai",
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].retryable is True
