@@ -200,9 +200,10 @@ retries.
 #### Requirement: Cancellation during retry
 
 When the run is cancelled during a retry backoff delay, the harness SHALL NOT
-reissue further attempts, SHALL end the run with the same terminal error
-entry, message-append, and error projection semantics as when the retry budget
-is exhausted, and SHALL emit no retry-start events after the cancellation. The
+reissue further attempts, SHALL end the run with the same message-append and
+error projection semantics as when the retry budget is exhausted, SHALL write
+exactly one terminal error entry in the diagnostics log for the failure, and
+SHALL emit no retry-start events after the cancellation. The
 mounted retry notice SHALL be replaced by that terminal error projection. The
 failed attempt's partial content SHALL remain discarded: the appended failed
 message SHALL NOT retain it in history or storage.
