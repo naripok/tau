@@ -9,7 +9,13 @@ import pytest
 from PIL import Image
 
 from conftest import isolate_home
-from pi_event_helpers import assistant_done, assistant_error, assistant_start
+from pi_event_helpers import (
+    assistant_done,
+    assistant_error,
+    assistant_start,
+    text_delta,
+    transport_error,
+)
 from tau_agent import (
     AgentMessage,
     AgentTool,
@@ -306,7 +312,8 @@ async def test_prompt_logs_error_event_diagnostic_data(tmp_path: Path) -> None:
             [
                 assistant_error(
                     message="provider failed",
-                    data={"status_code": 400, "body": "bad request"},
+                    status_code=400,
+                    body="bad request",
                 )
             ]
         ]
@@ -334,6 +341,7 @@ async def test_prompt_logs_error_event_diagnostic_data(tmp_path: Path) -> None:
     assert entry["error"] == {
         "message": "provider failed",
         "stop_reason": "error",
+        "provider": {"status_code": 400},
     }
     assert "Hello" not in log_path.read_text(encoding="utf-8")
 
@@ -349,6 +357,7 @@ async def test_prompt_logs_safe_provider_stream_error_details(tmp_path: Path) ->
             AssistantMessageDiagnostic(
                 type="provider_error",
                 details={
+                    "status_code": 400,
                     "event": {
                         "type": "error",
                         "error": {
@@ -359,7 +368,7 @@ async def test_prompt_logs_safe_provider_stream_error_details(tmp_path: Path) ->
                             "param": None,
                         },
                         "sequence_number": 2,
-                    }
+                    },
                 },
             )
         ],
@@ -387,6 +396,7 @@ async def test_prompt_logs_safe_provider_stream_error_details(tmp_path: Path) ->
         "message": "Our servers are currently overloaded. Please try again later.",
         "stop_reason": "error",
         "provider": {
+            "status_code": 400,
             "event": {
                 "type": "error",
                 "sequence_number": 2,
@@ -395,7 +405,7 @@ async def test_prompt_logs_safe_provider_stream_error_details(tmp_path: Path) ->
                     "code": "server_is_overloaded",
                     "message": "Our servers are currently overloaded. Please try again later.",
                 },
-            }
+            },
         },
     }
     assert "Hello" not in log_path.read_text(encoding="utf-8")
@@ -5071,3 +5081,119 @@ def test_minimal_commands_are_handled(tmp_path: Path) -> None:
     assert session.handle_command("/quit").exit_requested is True
     assert session.handle_command("/exit").exit_requested is True
     assert session.handle_command("/unknown").handled is False
+
+
+@pytest.mark.anyio
+async def test_prompt_logs_turn_retry_diagnostics(tmp_path: Path) -> None:
+    """Prove each reattempt logs one retry entry and no terminal error entry."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    recovered = AssistantMessage(content="recovered", model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), text_delta("partial"), transport_error("peer closed connection")],
+            [assistant_start(), assistant_done(recovered)],
+        ]
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    log_path = tau_paths.agent_calls_log_path
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    retry_entries = [entry for entry in entries if entry["kind"] == "assistant_retry"]
+    error_entries = [entry for entry in entries if entry["kind"] == "assistant_error"]
+    assert len(retry_entries) == 1
+    assert retry_entries[0]["retry"]["attempt"] == 2
+    assert retry_entries[0]["retry"]["max_attempts"] == 3
+    assert retry_entries[0]["retry"]["reason"] == "peer closed connection"
+    assert retry_entries[0]["retry"]["error_message"] == "peer closed connection"
+    assert retry_entries[0]["provider_name"] == "openai"
+    assert error_entries == []
+
+
+@pytest.mark.anyio
+async def test_prompt_logs_exhausted_retries_and_terminal_error(tmp_path: Path) -> None:
+    """Prove exhausted retries log each reattempt plus exactly one terminal error."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    provider = FakeProvider(
+        [
+            [assistant_start(), transport_error("drop 1")],
+            [assistant_start(), transport_error("drop 2")],
+            [assistant_start(), transport_error("drop 3")],
+        ]
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    log_path = tau_paths.agent_calls_log_path
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    retry_entries = [entry for entry in entries if entry["kind"] == "assistant_retry"]
+    error_entries = [entry for entry in entries if entry["kind"] == "assistant_error"]
+    assert len(retry_entries) == 2
+    assert len(error_entries) == 1
+    assert error_entries[0]["error"]["stop_reason"] == "error"
+
+
+@pytest.mark.anyio
+async def test_auto_naming_failure_is_never_turn_retried(tmp_path: Path) -> None:
+    """Prove one-shot provider calls (auto-naming) bypass turn-level retry."""
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    provider = FakeProvider(
+        [
+            # stream 0: auto-naming call (one-shot, transient-shaped failure)
+            [assistant_error("peer closed connection")],
+            # stream 1: the main assistant turn
+            [assistant_start(), assistant_done(AssistantMessage(content="ok", model="fake"))],
+        ]
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai",
+            session_id="session-1",
+            auto_compact_enabled=False,
+            session_manager=SessionManager(paths=tau_paths),
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    assert len(provider.calls) == 2
+    log_path = tau_paths.agent_calls_log_path
+    entries = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if "retry" in line
+    ]
+    assert all(entry["kind"] != "assistant_retry" for entry in entries)
