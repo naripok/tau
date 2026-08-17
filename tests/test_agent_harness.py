@@ -6,9 +6,9 @@ import pytest
 from pi_event_helpers import (
     assistant_done,
     assistant_start,
-    retryable_error,
     text_delta,
     tool_call_end,
+    transport_error,
 )
 from tau_agent import (
     DEFAULT_TURN_RETRIES,
@@ -377,7 +377,7 @@ async def test_harness_retries_transient_failures_with_configured_budget() -> No
     recovered = AssistantMessage(content="recovered", model="fake")
     provider = FakeProvider(
         [
-            [assistant_start(), text_delta("partial"), retryable_error("drop")],
+            [assistant_start(), text_delta("partial"), transport_error("drop")],
             [assistant_start(), assistant_done(recovered)],
         ]
     )

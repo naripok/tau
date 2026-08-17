@@ -32,7 +32,12 @@ from tau_agent.provider_events import (
     AssistantErrorEvent,
     AssistantStartEvent,
 )
-from tau_agent.retry import turn_retry_delay_seconds, wait_for_retry
+from tau_agent.retry import (
+    failure_is_retryable,
+    failure_reason,
+    turn_retry_delay_seconds,
+    wait_for_retry,
+)
 from tau_agent.tool_history import repair_tool_history
 from tau_agent.tools import AgentTool, AgentToolResult
 
@@ -210,7 +215,7 @@ async def _assistant_events(
 ) -> AsyncIterator[AgentEvent]:
     """Stream one turn's provider response, retrying transient failures.
 
-    A failed attempt that the provider classified as retryable is discarded:
+    A failed attempt the central classifier marks retryable is discarded:
     consumers never see its terminal error end, only a retry-start notice
     followed by the reattempt's stream. The failed message is never added to
     harness history because the caller appends only the final message.
@@ -229,10 +234,8 @@ async def _assistant_events(
         retry_failure: AssistantMessage | None = None
         async for event in source:
             if isinstance(event, AssistantErrorEvent):
-                if (
-                    event.retryable
-                    and retries_done < max_turn_retries
-                    and (signal is None or not signal.is_cancelled())
+                if retries_done < max_turn_retries and failure_is_retryable(
+                    event.error, signal=signal
                 ):
                     retry_failure = event.error
                     break
@@ -256,14 +259,12 @@ async def _assistant_events(
         if retry_failure is None:
             return
         delay = turn_retry_delay_seconds(retries_done)
-        reason, error_type = _retry_failure_reason(retry_failure)
         yield TurnRetryStartEvent(
             attempt=retries_done + 2,
             max_attempts=max_turn_retries + 1,
             delay_seconds=delay,
-            reason=reason,
+            reason=failure_reason(retry_failure),
             error_message=retry_failure.error_message or "",
-            error_type=error_type,
         )
         retries_done += 1
         if not await wait_for_retry(delay, signal=signal):
@@ -274,20 +275,6 @@ async def _assistant_events(
             yield MessageStartEvent(message=discarded)
             yield MessageEndEvent(message=discarded)
             return
-
-
-def _retry_failure_reason(message: AssistantMessage) -> tuple[str, str | None]:
-    """Return a short (reason, error_type) pair for a retryable failure."""
-    for diagnostic in message.diagnostics or []:
-        if diagnostic.type != "provider_error" or not diagnostic.details:
-            continue
-        error_type = diagnostic.details.get("error_type")
-        if isinstance(error_type, str) and error_type:
-            return f"network error ({error_type})", error_type
-        status_code = diagnostic.details.get("status_code")
-        if isinstance(status_code, int) and not isinstance(status_code, bool):
-            return f"HTTP {status_code}", f"HTTP {status_code}"
-    return "provider error", None
 
 
 async def _execute_tool_call(

@@ -1,6 +1,11 @@
 """Canonical Pi event constructors used by the test suite."""
 
-from tau_agent.messages import AssistantMessage, ThinkingContent, ToolCall
+from tau_agent.messages import (
+    AssistantMessage,
+    AssistantMessageDiagnostic,
+    ThinkingContent,
+    ToolCall,
+)
 from tau_agent.provider_events import (
     AssistantDoneEvent,
     AssistantErrorEvent,
@@ -9,6 +14,7 @@ from tau_agent.provider_events import (
     ThinkingDeltaEvent,
     ToolCallEndEvent,
 )
+from tau_agent.types import JSONValue
 
 
 def assistant_start(model: str = "fake") -> AssistantStartEvent:
@@ -55,14 +61,30 @@ def assistant_done(
 
 
 def assistant_error(
-    message: str, data: object = None, *, retryable: bool = False
+    message: str,
+    data: object = None,
+    *,
+    status_code: int | None = None,
+    body: str = "",
 ) -> AssistantErrorEvent:
     del data
-    error = AssistantMessage(stop_reason="error", error_message=message)
-    return AssistantErrorEvent(reason="error", error=error, retryable=retryable)
+    details: dict[str, JSONValue] = {}
+    if status_code is not None:
+        details["status_code"] = status_code
+    if body:
+        details["body"] = body
+    diagnostics = (
+        [AssistantMessageDiagnostic(type="provider_error", details=details)] if details else None
+    )
+    error = AssistantMessage(
+        stop_reason="error",
+        error_message=message,
+        diagnostics=diagnostics,
+    )
+    return AssistantErrorEvent(reason="error", error=error)
 
 
-def retryable_error(message: str, *, partial: str = "") -> AssistantErrorEvent:
-    """A transient provider failure whose partial output is safe to discard."""
+def transport_error(message: str, *, partial: str = "") -> AssistantErrorEvent:
+    """A transport-level provider failure carrying no status or terminal markers."""
     error = AssistantMessage(stop_reason="error", error_message=message, content=partial)
-    return AssistantErrorEvent(reason="error", error=error, retryable=True)
+    return AssistantErrorEvent(reason="error", error=error)

@@ -88,7 +88,6 @@ class AssistantErrorEvent(WireModel):
     type: Literal["error"] = "error"
     reason: ErrorReason
     error: AssistantMessage
-    retryable: bool = False
 
 
 type AssistantMessageEvent = Annotated[
