@@ -11,7 +11,6 @@ from typing import Annotated
 import anyio
 import typer
 
-from tau_agent.harness import DEFAULT_TURN_RETRIES
 from tau_agent.provider import ModelProvider
 from tau_agent.session import JsonlSessionStorage, SessionEntry, SessionStorage
 from tau_ai.env import (
@@ -111,7 +110,6 @@ def setup_command(
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES,
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
-    turn_retry_max: int = DEFAULT_TURN_RETRIES,
     set_default: bool = True,
 ) -> None:
     """Create or update an OpenAI-compatible provider entry."""
@@ -125,7 +123,6 @@ def setup_command(
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
         max_retry_delay_seconds=max_retry_delay_seconds,
-        turn_retry_max=turn_retry_max,
     )
     updated = upsert_openai_compatible_provider(settings, provider, set_default=set_default)
     path = save_provider_settings(updated)
@@ -193,10 +190,6 @@ def main(
             help="Provider retry delay in seconds for `tau setup`.",
         ),
     ] = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
-    setup_turn_retry_max: Annotated[
-        int,
-        typer.Option("--turn-retry-max", help="Turn-level retry count for `tau setup`."),
-    ] = DEFAULT_TURN_RETRIES,
     setup_default: Annotated[
         bool,
         typer.Option("--set-default/--no-set-default", help="Make setup provider the default."),
@@ -403,7 +396,6 @@ def main(
             timeout_seconds=setup_timeout_seconds,
             max_retries=setup_max_retries,
             max_retry_delay_seconds=setup_max_retry_delay_seconds,
-            turn_retry_max=setup_turn_retry_max,
             set_default=setup_default,
         )
         raise typer.Exit()

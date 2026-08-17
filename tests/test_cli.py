@@ -715,7 +715,7 @@ async def test_run_print_mode_fails_on_non_recoverable_error(
         [
             [
                 assistant_start(model="fake"),
-                assistant_error(message="provider failed"),
+                assistant_error(message="provider failed", status_code=401),
             ]
         ]
     )
@@ -1898,34 +1898,3 @@ async def test_headless_ask_declines_without_corrupting_structured_stdout(
     assert "PROTECTED-STRUCTURED-SECRET" not in provider.calls[0][1]
     assert "Project inputs" not in captured.out
     assert "Project inputs" in captured.err
-
-
-def test_setup_command_persists_turn_retry_max(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Prove `tau setup` persists the turn-retry budget with the provider."""
-    isolate_home(monkeypatch, tmp_path)
-    monkeypatch.setenv("LOCAL_API_KEY", "test-key")
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "--provider",
-            "local",
-            "--base-url",
-            "http://localhost:11434/v1/",
-            "--api-key-env",
-            "LOCAL_API_KEY",
-            "--turn-retry-max",
-            "5",
-            "--model",
-            "qwen",
-            "setup",
-        ],
-    )
-
-    settings = load_provider_settings(TauPaths(home=tmp_path / ".tau"))
-    provider = settings.get_provider("local")
-    assert result.exit_code == 0
-    assert provider.turn_retry_max == 5

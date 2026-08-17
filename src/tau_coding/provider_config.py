@@ -13,7 +13,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
 
-from tau_agent.harness import DEFAULT_TURN_RETRIES
 from tau_ai.env import (
     CACHE_RETENTION_LONG,
     CACHE_RETENTION_NONE,
@@ -130,7 +129,6 @@ class OpenAICompatibleProviderConfig:
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
-    turn_retry_max: int = DEFAULT_TURN_RETRIES
     thinking_levels: tuple[ThinkingLevel, ...] | None = None
     thinking_models: tuple[str, ...] = ()
     thinking_default: ThinkingLevel | None = None
@@ -143,7 +141,6 @@ class OpenAICompatibleProviderConfig:
             timeout_seconds=self.timeout_seconds,
             max_retries=self.max_retries,
             max_retry_delay_seconds=self.max_retry_delay_seconds,
-            turn_retry_max=self.turn_retry_max,
         )
         _validate_context_windows(self.context_windows)
         _validate_model_metadata(self.models, self.model_metadata)
@@ -177,7 +174,6 @@ class OpenAICompatibleProviderConfig:
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
             "max_retry_delay_seconds": self.max_retry_delay_seconds,
-            "turn_retry_max": self.turn_retry_max,
             "thinking_levels": (
                 list(self.thinking_levels) if self.thinking_levels is not None else None
             ),
@@ -207,7 +203,6 @@ class AnthropicProviderConfig:
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
-    turn_retry_max: int = DEFAULT_TURN_RETRIES
     thinking_levels: tuple[ThinkingLevel, ...] | None = None
     thinking_models: tuple[str, ...] = ()
     thinking_default: ThinkingLevel | None = None
@@ -219,7 +214,6 @@ class AnthropicProviderConfig:
             timeout_seconds=self.timeout_seconds,
             max_retries=self.max_retries,
             max_retry_delay_seconds=self.max_retry_delay_seconds,
-            turn_retry_max=self.turn_retry_max,
         )
         _validate_context_windows(self.context_windows)
         _validate_model_metadata(self.models, self.model_metadata)
@@ -259,7 +253,6 @@ class AnthropicProviderConfig:
             "thinking_default": self.thinking_default,
             "thinking_parameter": self.thinking_parameter,
             "thinking_defaults": dict(self.thinking_defaults),
-            "turn_retry_max": self.turn_retry_max,
         }
 
 
@@ -286,7 +279,6 @@ class OpenAICodexProviderConfig:
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
-    turn_retry_max: int = DEFAULT_TURN_RETRIES
     thinking_levels: tuple[ThinkingLevel, ...] | None = None
     thinking_models: tuple[str, ...] = ()
     thinking_default: ThinkingLevel | None = None
@@ -298,7 +290,6 @@ class OpenAICodexProviderConfig:
             timeout_seconds=self.timeout_seconds,
             max_retries=self.max_retries,
             max_retry_delay_seconds=self.max_retry_delay_seconds,
-            turn_retry_max=self.turn_retry_max,
         )
         _validate_context_windows(self.context_windows)
         _validate_model_metadata(self.models, self.model_metadata)
@@ -328,7 +319,6 @@ class OpenAICodexProviderConfig:
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
             "max_retry_delay_seconds": self.max_retry_delay_seconds,
-            "turn_retry_max": self.turn_retry_max,
             "thinking_levels": (
                 list(self.thinking_levels) if self.thinking_levels is not None else None
             ),
@@ -872,7 +862,6 @@ def _merge_provider_config(existing: ProviderConfig, incoming: ProviderConfig) -
             timeout_seconds=existing.timeout_seconds,
             max_retries=existing.max_retries,
             max_retry_delay_seconds=existing.max_retry_delay_seconds,
-            turn_retry_max=existing.turn_retry_max,
             context_windows={**incoming.context_windows, **existing.context_windows},
             model_metadata=_merge_provider_model_metadata(
                 incoming.model_metadata,
@@ -934,7 +923,6 @@ def _merge_openai_compatible_provider(
         timeout_seconds=existing.timeout_seconds,
         max_retries=existing.max_retries,
         max_retry_delay_seconds=existing.max_retry_delay_seconds,
-        turn_retry_max=existing.turn_retry_max,
         context_windows={**incoming.context_windows, **existing.context_windows},
         thinking_levels=(
             existing.thinking_levels
@@ -981,7 +969,6 @@ def _merge_anthropic_provider(
         timeout_seconds=existing.timeout_seconds,
         max_retries=existing.max_retries,
         max_retry_delay_seconds=existing.max_retry_delay_seconds,
-        turn_retry_max=existing.turn_retry_max,
         context_windows={**incoming.context_windows, **existing.context_windows},
         thinking_levels=(
             existing.thinking_levels
@@ -1071,7 +1058,6 @@ def _provider_preference_to_json(provider: ProviderConfig) -> dict[str, Any]:
         "timeout_seconds": provider.timeout_seconds,
         "max_retries": provider.max_retries,
         "max_retry_delay_seconds": provider.max_retry_delay_seconds,
-        "turn_retry_max": provider.turn_retry_max,
         "thinking_defaults": dict(provider.thinking_defaults),
     }
     if isinstance(provider, OpenAICompatibleProviderConfig) and provider.inference_providers:
@@ -1307,14 +1293,6 @@ def _apply_provider_preference(
         if "max_retry_delay_seconds" in value
         else provider.max_retry_delay_seconds
     )
-    turn_retry_max = (
-        _non_negative_int(
-            value.get("turn_retry_max"),
-            f"provider_preferences.{provider.name}.turn_retry_max",
-        )
-        if "turn_retry_max" in value
-        else provider.turn_retry_max
-    )
     thinking_defaults = (
         _thinking_defaults_dict(
             value.get("thinking_defaults"),
@@ -1342,7 +1320,6 @@ def _apply_provider_preference(
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             max_retry_delay_seconds=max_retry_delay_seconds,
-            turn_retry_max=turn_retry_max,
             thinking_defaults=thinking_defaults,
             inference_providers=inference_providers,
         )
@@ -1353,7 +1330,6 @@ def _apply_provider_preference(
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
         max_retry_delay_seconds=max_retry_delay_seconds,
-        turn_retry_max=turn_retry_max,
         thinking_defaults=thinking_defaults,
     )
 
@@ -2007,10 +1983,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
         ),
         f"providers[{name}].max_retry_delay_seconds",
     )
-    turn_retry_max = _non_negative_int(
-        data.get("turn_retry_max", DEFAULT_TURN_RETRIES),
-        f"providers[{name}].turn_retry_max",
-    )
     thinking_levels = _optional_thinking_levels(
         data.get("thinking_levels"), f"providers[{name}].thinking_levels"
     )
@@ -2044,7 +2016,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             max_retry_delay_seconds=max_retry_delay_seconds,
-            turn_retry_max=turn_retry_max,
             thinking_levels=thinking_levels,
             thinking_models=thinking_models,
             thinking_default=thinking_default,
@@ -2066,7 +2037,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             max_retry_delay_seconds=max_retry_delay_seconds,
-            turn_retry_max=turn_retry_max,
             thinking_levels=thinking_levels,
             thinking_models=thinking_models,
             thinking_default=thinking_default,
@@ -2125,7 +2095,6 @@ def _validate_provider_numbers(
     timeout_seconds: float,
     max_retries: int,
     max_retry_delay_seconds: float,
-    turn_retry_max: int,
 ) -> None:
     if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
         raise ProviderConfigError("Provider timeout_seconds must be greater than 0")
@@ -2137,12 +2106,6 @@ def _validate_provider_numbers(
         or max_retry_delay_seconds < 0
     ):
         raise ProviderConfigError("Provider max_retry_delay_seconds must be 0 or greater")
-    if (
-        not isinstance(turn_retry_max, int)
-        or isinstance(turn_retry_max, bool)
-        or turn_retry_max < 0
-    ):
-        raise ProviderConfigError("Provider turn_retry_max must be 0 or greater")
 
 
 def _validate_context_windows(context_windows: dict[str, int]) -> None:
