@@ -126,8 +126,10 @@ every file path listed beneath it. Expanded edit and write groups retain each
 invocation and result; expanded read groups omit repeated file contents. The
 complete block remains one selectable text surface,
 including across line boundaries.
-Batches never cross assistant text, model continuations, or separate responses;
-extension tools, custom rendered call cards, and skill loads remain separate.
+Batches never cross assistant text, thinking, or unrelated responses. Consecutive
+same-tool edit or write continuations are grouped so providers that serialize
+file mutations one at a time still produce one file list. Extension tools, custom
+rendered call cards, and skill loads remain separate.
 
 Tool results (like long `read` or `bash` output) render as compact previews so
 the transcript stays readable. Tau requires the model to give each `bash` call a
@@ -192,9 +194,16 @@ and loaded tools, skills, prompt templates, extensions, and context files such a
 `AGENTS.md`. Tool and extension names use compact comma-separated lists limited
 to three rendered lines. Skills and prompt templates are grouped under their
 resource origins (for example, `./.tau/skills`, `~/.agents/skills`, or
-`./.tau/prompts`), and every loaded skill and prompt is shown. If the sidebar
-content is taller than the available space, scroll it to see the remaining
-resource groups; the Tau version mark stays pinned at the bottom. Context files
+`./.tau/prompts`). These two sections start collapsed and show their loaded-item
+counts in the headings. The skills heading also shows the estimated token cost of
+the loaded skill index in the system prompt; full skill instructions enter context
+only when that skill is invoked. Click either heading (or focus it and press
+**Enter**) to expand or collapse that section independently, so both lists can
+remain open when needed. Every loaded skill or prompt is shown while its section
+is expanded. If
+the sidebar content is
+taller than the available space, scroll it to see the remaining resource groups;
+the Tau version mark stays pinned at the bottom. Context files
 use a bullet list with one path per line, limited to five entries. Truncated sections
 end with `...(X more)` showing how many context entries are hidden. Project
 context paths are relative to the working directory; context

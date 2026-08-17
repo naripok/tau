@@ -5,7 +5,7 @@
 ## Fork changes
 
 Everything below is relative to upstream `huggingface/tau` as of the latest
-upstream sync (`15f77f7`, 2026-08-16). Details live in `dev-notes/` (see
+upstream sync (`95b7ca4`, 2026-08-17). Details live in `dev-notes/` (see
 [`dev-notes/tui-responsiveness-perf.md`](dev-notes/tui-responsiveness-perf.md)
 and [`dev-notes/auto-compact-percent.md`](dev-notes/auto-compact-percent.md)).
 
@@ -49,10 +49,12 @@ provider layer, session format, and extension API are untouched:
 
 ### Upstream sync
 
-- Forked from Tau `v0.3.10` and merged upstream `main` as of `15f77f7`
-  (2026-08-16), bringing in print-mode session resume, TUI tool batching and
-  compact bash invocations, resource-conflict startup alerts, and grouped write
-  calls.
+- Forked from Tau `v0.3.10` and merged upstream `main` as of `95b7ca4`
+  (2026-08-17), now based on Tau `v0.3.11`. The latest sync brings in
+  print-mode session resume, TUI tool batching and compact bash invocations,
+  resource-conflict startup alerts, grouped write calls, grouped serialized
+  edit and write continuations, and a collapsible sidebar with refined resource
+  heading styles.
 
 <p align="center">
   <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
