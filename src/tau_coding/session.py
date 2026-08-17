@@ -9,19 +9,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from tau_agent.events import (
-    AgentEndEvent,
-    AgentEvent,
-    MessageEndEvent,
-    ToolExecutionEndEvent,
-    TurnRetryStartEvent,
-)
-from tau_agent.harness import (
-    DEFAULT_TURN_RETRIES,
-    AgentHarness,
-    AgentHarnessConfig,
-    QueuedMessages,
-)
+from tau_agent.events import AgentEndEvent, AgentEvent, MessageEndEvent, ToolExecutionEndEvent
+from tau_agent.harness import AgentHarness, AgentHarnessConfig, QueuedMessages
 from tau_agent.messages import (
     AgentMessage,
     AssistantMessage,
@@ -51,7 +40,6 @@ from tau_agent.session.tree import SessionTreeError, path_to_entry
 from tau_agent.tool_history import ToolHistoryRepair, repair_tool_history
 from tau_agent.tools import AgentTool
 from tau_agent.types import JSONValue
-from tau_ai.classify import is_context_overflow
 from tau_ai.model_limits import ModelLimitsProvider, RuntimeModelLimits
 from tau_coding.branch_summary import summarize_branch_messages_with_model
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
@@ -503,11 +491,6 @@ class CodingSession:
                 system=system,
                 tools=tools,
                 session_id=config.session_id,
-                max_turn_retries=(
-                    config.runtime_provider_config.turn_retry_max
-                    if config.runtime_provider_config is not None
-                    else DEFAULT_TURN_RETRIES
-                ),
             ),
             messages=state.messages,
         )
@@ -1239,7 +1222,6 @@ class CodingSession:
             raise ProviderConfigError(str(exc)) from exc
         self._owned_providers.append(provider)
         self._harness.config.provider = provider
-        self._harness.config.max_turn_retries = provider_config.turn_retry_max
         self._provider_name = provider_config.name
         self._inference_provider = _configured_inference_provider(provider_config, model)
         self._runtime_provider_config = provider_config
@@ -1422,7 +1404,6 @@ class CodingSession:
         provider_config: ProviderConfig,
     ) -> None:
         self._harness.config.provider = provider
-        self._harness.config.max_turn_retries = provider_config.turn_retry_max
         self._runtime_provider_config = provider_config
         self._invalidate_runtime_model_limits()
 
@@ -2056,15 +2037,6 @@ class CodingSession:
                     )
                     if is_context_overflow_error(event.message):
                         overflow_message = event.message
-                if isinstance(event, TurnRetryStartEvent):
-                    self._last_diagnostic_log_path = self._diagnostic_logger.log_turn_retry(
-                        context=context,
-                        attempt=event.attempt,
-                        max_attempts=event.max_attempts,
-                        reason=event.reason,
-                        error_message=event.error_message,
-                        error_type=event.error_type,
-                    )
                 if isinstance(event, AgentEndEvent):
                     yield SessionAgentEndEvent(messages=event.messages, will_retry=False)
                 else:
@@ -2112,15 +2084,6 @@ class CodingSession:
                                     phase="agent_loop_retry",
                                     message=retry_event.message,
                                 )
-                            )
-                        if isinstance(retry_event, TurnRetryStartEvent):
-                            self._last_diagnostic_log_path = self._diagnostic_logger.log_turn_retry(
-                                context=context,
-                                attempt=retry_event.attempt,
-                                max_attempts=retry_event.max_attempts,
-                                reason=retry_event.reason,
-                                error_message=retry_event.error_message,
-                                error_type=retry_event.error_type,
                             )
                         if isinstance(retry_event, AgentEndEvent):
                             yield SessionAgentEndEvent(
@@ -2174,15 +2137,6 @@ class CodingSession:
                         context=context,
                         phase="agent_loop",
                         message=event.message,
-                    )
-                if isinstance(event, TurnRetryStartEvent):
-                    self._last_diagnostic_log_path = self._diagnostic_logger.log_turn_retry(
-                        context=context,
-                        attempt=event.attempt,
-                        max_attempts=event.max_attempts,
-                        reason=event.reason,
-                        error_message=event.error_message,
-                        error_type=event.error_type,
                     )
                 if isinstance(event, AgentEndEvent):
                     yield SessionAgentEndEvent(messages=event.messages, will_retry=False)
@@ -2740,7 +2694,23 @@ def _next_user_message_index(
 
 def is_context_overflow_error(message: AssistantMessage) -> bool:
     """Return True when an assistant error looks like a context overflow."""
-    return is_context_overflow(message.error_message or "")
+    text = message.error_message or ""
+    normalized = text.lower()
+    markers = (
+        "context length",
+        "context window",
+        "context limit",
+        "maximum context",
+        "max context",
+        "input is too long",
+        "input length",
+        "prompt is too long",
+        "too many tokens",
+        "token limit",
+        "exceeds the limit",
+        "exceeded the limit",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _detach_missing_parents(entries: list[SessionEntry]) -> list[SessionEntry]:

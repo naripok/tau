@@ -31,12 +31,6 @@ from tau_ai._provider_events import (
     ProviderThinkingDeltaEvent,
     ProviderToolCallEvent,
 )
-from tau_ai.classify import (
-    is_context_overflow,
-    is_retryable_http_failure,
-    is_terminal_rate_limit,
-    is_transient_status,
-)
 from tau_ai.content import (
     NON_VISION_TOOL_IMAGE_PLACEHOLDER,
     NON_VISION_USER_IMAGE_PLACEHOLDER,
@@ -55,7 +49,7 @@ from tau_ai.http import create_async_client
 from tau_ai.http_errors import provider_http_error_message
 from tau_ai.provider import CancellationToken
 from tau_ai.retry import provider_retry_event, retry_delay_seconds, wait_for_retry
-from tau_ai.stream import attach_tail_read_diagnostic, canonicalize_provider_stream
+from tau_ai.stream import canonicalize_provider_stream
 from tau_ai.tool_call_ids import portable_tool_call_id
 
 ANTHROPIC_VERSION = "2023-06-01"
@@ -171,7 +165,6 @@ class AnthropicProvider:
             url = f"{base_url.rstrip('/')}/messages"
 
             attempt = 0
-            terminal_payload: tuple[list[ProviderEvent], ProviderResponseEndEvent] | None = None
             while True:
                 emitted_content = False
                 try:
@@ -181,11 +174,7 @@ class AnthropicProvider:
                         if response.status_code >= 400:
                             body = await response.aread()
                             body_text = body.decode(errors="replace")
-                            if self._should_retry(
-                                attempt,
-                                status_code=response.status_code,
-                                body=body_text,
-                            ):
+                            if self._should_retry(attempt, status_code=response.status_code):
                                 delay = retry_delay_seconds(
                                     attempt,
                                     max_delay_seconds=self._config.max_retry_delay_seconds,
@@ -216,9 +205,6 @@ class AnthropicProvider:
                                     "body": body_text,
                                     "attempts": attempt + 1,
                                 },
-                                retryable=is_retryable_http_failure(
-                                    response.status_code, body_text
-                                ),
                             )
                             return
 
@@ -299,8 +285,6 @@ class AnthropicProvider:
                                         _string_or_empty(delta.get("stop_reason")) or finish_reason
                                     )
                                 usage = _apply_message_delta_usage(usage, chunk.get("usage"))
-                            elif event_type == "message_stop":
-                                break
                             elif event_type == "error":
                                 error_type, message = _anthropic_stream_error_details(chunk)
                                 if (
@@ -313,9 +297,6 @@ class AnthropicProvider:
                                 yield ProviderErrorEvent(
                                     message=message,
                                     data={"event": chunk, "attempts": attempt + 1},
-                                    retryable=_retryable_anthropic_stream_error(error_type)
-                                    and not is_context_overflow(message)
-                                    and not is_terminal_rate_limit(message),
                                 )
                                 return
 
@@ -340,6 +321,9 @@ class AnthropicProvider:
                         tool_calls = [
                             builder.build(index) for index, builder in sorted(tool_builders.items())
                         ]
+                        for tool_call in tool_calls:
+                            yield ProviderToolCallEvent(tool_call=tool_call)
+
                         content = assistant_content("".join(content_parts), tool_calls)
                         if thinking_parts:
                             content.insert(
@@ -349,25 +333,15 @@ class AnthropicProvider:
                                     thinking_signature=thinking_signature,
                                 ),
                             )
-                        terminal_payload = (
-                            [
-                                ProviderToolCallEvent(tool_call=tool_call)
-                                for tool_call in tool_calls
-                            ],
-                            ProviderResponseEndEvent(
-                                message=AssistantMessage(
-                                    content=content,
-                                    usage=usage or Usage(),
-                                ),
-                                finish_reason=finish_reason,
+                        yield ProviderResponseEndEvent(
+                            message=AssistantMessage(
+                                content=content,
+                                usage=usage or Usage(),
                             ),
+                            finish_reason=finish_reason,
                         )
-                except httpx.HTTPError as exc:
-                    if terminal_payload is not None:
-                        for tool_call_event in terminal_payload[0]:
-                            yield tool_call_event
-                        yield attach_tail_read_diagnostic(terminal_payload[1], exc)
                         return
+                except httpx.HTTPError as exc:
                     if not emitted_content and self._should_retry(attempt):
                         delay = retry_delay_seconds(
                             attempt,
@@ -389,18 +363,9 @@ class AnthropicProvider:
                         continue
                     yield ProviderErrorEvent(
                         message=str(exc),
-                        data={
-                            "attempts": attempt + 1,
-                            "error_type": type(exc).__name__,
-                        },
-                        retryable=True,
+                        data={"attempts": attempt + 1},
                     )
                     return
-                if terminal_payload is not None:
-                    for tool_call_event in terminal_payload[0]:
-                        yield tool_call_event
-                    yield terminal_payload[1]
-                return
 
         return iterator()
 
@@ -409,18 +374,10 @@ class AnthropicProvider:
             self._client = create_async_client(timeout=self._config.timeout_seconds)
         return self._client
 
-    def _should_retry(
-        self, attempt: int, *, status_code: int | None = None, body: str = ""
-    ) -> bool:
+    def _should_retry(self, attempt: int, *, status_code: int | None = None) -> bool:
         if attempt >= self._config.max_retries:
             return False
-        if status_code is None:
-            return True
-        return (
-            is_transient_status(status_code)
-            and not is_terminal_rate_limit(body)
-            and not is_context_overflow(body)
-        )
+        return status_code is None or status_code in {408, 409, 425, 429} or status_code >= 500
 
 
 _TRANSIENT_ANTHROPIC_STREAM_ERROR_TYPES = frozenset(

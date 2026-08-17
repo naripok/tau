@@ -1,18 +1,23 @@
-"""Shared retry helpers for provider adapters.
-
-The generic backoff helpers live in ``tau_agent.retry`` so the harness can use
-them without depending on the provider layer. This module keeps the
-provider-facing ``ProviderRetryEvent`` builder and re-exports the helpers so
-the adapters' imports stay unchanged.
-"""
+"""Shared retry helpers for provider adapters."""
 
 from __future__ import annotations
 
-from tau_agent.retry import retry_delay_seconds, wait_for_retry  # noqa: F401
+from asyncio import sleep
+
 from tau_agent.types import JSONValue
 from tau_ai._provider_events import ProviderRetryEvent
+from tau_ai.provider import CancellationToken
 
-__all__ = ["provider_retry_event", "retry_delay_seconds", "wait_for_retry"]
+RETRY_POLL_SECONDS = 0.05
+RETRY_BASE_DELAY_SECONDS = 0.25
+
+
+def retry_delay_seconds(attempt: int, *, max_delay_seconds: float) -> float:
+    """Return an exponential retry delay capped by provider config."""
+    if max_delay_seconds <= 0:
+        return 0.0
+    base_delay = min(RETRY_BASE_DELAY_SECONDS, max_delay_seconds)
+    return float(min(max_delay_seconds, base_delay * (2**attempt)))
 
 
 def provider_retry_event(
@@ -36,3 +41,22 @@ def provider_retry_event(
         ),
         data=data,
     )
+
+
+async def wait_for_retry(
+    delay_seconds: float,
+    *,
+    signal: CancellationToken | None,
+) -> bool:
+    """Sleep before a retry while allowing cancellation to interrupt backoff."""
+    if delay_seconds <= 0:
+        return signal is None or not signal.is_cancelled()
+
+    remaining = delay_seconds
+    while remaining > 0:
+        if signal is not None and signal.is_cancelled():
+            return False
+        step = min(RETRY_POLL_SECONDS, remaining)
+        await sleep(step)
+        remaining -= step
+    return signal is None or not signal.is_cancelled()

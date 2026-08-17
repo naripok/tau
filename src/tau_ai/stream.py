@@ -41,32 +41,6 @@ def _snapshot(message: AssistantMessage) -> AssistantMessage:
     return message.model_copy(deep=True)
 
 
-def attach_tail_read_diagnostic(
-    end_event: ProviderResponseEndEvent, exc: Exception
-) -> ProviderResponseEndEvent:
-    """Return a response-end event whose message notes the trailing read failure.
-
-    The provider stream already delivered its terminal chunk; the connection
-    died only while reading the remaining body bytes, so the response is
-    complete and the failure is recorded as a diagnostic instead of an error.
-    """
-    return end_event.model_copy(
-        update={
-            "message": end_event.message.model_copy(
-                update={
-                    "diagnostics": [
-                        *(end_event.message.diagnostics or []),
-                        AssistantMessageDiagnostic(
-                            type="response_tail_read",
-                            details={"error": str(exc), "error_type": type(exc).__name__},
-                        ),
-                    ]
-                }
-            )
-        }
-    )
-
-
 async def _end_active_block(
     partial: AssistantMessage,
     index: int | None,
@@ -225,7 +199,7 @@ async def canonicalize_provider_stream(
             error.diagnostics = [
                 AssistantMessageDiagnostic(type="provider_error", details=event.data)
             ]
-            yield AssistantErrorEvent(reason="error", error=error, retryable=event.retryable)
+            yield AssistantErrorEvent(reason="error", error=error)
             terminal = True
 
     if not started:
