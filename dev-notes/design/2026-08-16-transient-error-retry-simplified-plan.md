@@ -76,7 +76,7 @@ grep -rn "turn_retry_max" src/tau_coding/session.py || true
 
 Expected: empty output. If anything prints, the restore failed; redo Step 1.
 
-Note: `src/tau_ai/` at `bc2d5a1` legitimately contains pre-existing `_retryable_*` identifiers (`_retryable_anthropic_stream_error` in `anthropic.py`, `_retryable_stream_error_event` / `_is_retryable_status` in `openai_codex.py`, and one in `openai_compatible.py`) — these are upstream's own provider-internal retry classification and must NOT be touched; the pattern above deliberately avoids them. `tests/pi_event_helpers.py` and `src/tau_agent/*` intentionally still carry the shipped retryable state at this point (removed in T3); ignore them in this check.
+Note: `src/tau_ai/` at `bc2d5a1` legitimately contains pre-existing `_retryable_*` identifiers (`_retryable_anthropic_stream_error` in `anthropic.py`, `_retryable_stream_error_event` / `_is_retryable_status` in `openai_codex.py`) — these are upstream's own provider-internal retry classification and must NOT be touched; the pattern above deliberately avoids them. `tests/pi_event_helpers.py` and `src/tau_agent/*` intentionally still carry the shipped retryable state at this point (removed in T3); ignore them in this check.
 
 - [ ] **Step 3: Format the restored files and run their tests**
 
@@ -435,8 +435,8 @@ def transport_error(message: str, *, partial: str = "") -> AssistantErrorEvent:
 
 - [ ] **Step 2: Rework the loop fixtures** — in `tests/test_agent_loop.py`:
 
-- Change the import `retryable_error,` to `transport_error,`.
-- Replace every `retryable_error(` occurrence with `transport_error(` — there are exactly 10 call sites across 6 tests: `test_agent_loop_retries_transient_failure_then_succeeds` (1), `test_agent_loop_exhausts_turn_retry_budget` (3), `test_agent_loop_retry_backoff_delays_grow` (3), `test_agent_loop_turn_retry_disabled_with_zero_budget` (1), `test_agent_loop_cancel_during_backoff_ends_run` (1), and `test_agent_loop_cancel_during_reattempt_ends_run` (1). (The non-retryable error test uses `assistant_error`, not `retryable_error`; it is reworked in the bullet below.)
+- In the `pi_event_helpers` import block, delete the `retryable_error,` line and add `transport_error,` after `tool_call_end` (isort order: `assistant_done, assistant_error, assistant_start, text_delta, thinking_delta, tool_call_end, transport_error`).
+- Replace every `retryable_error(` occurrence with `transport_error(` — there are exactly 10 call sites across 6 tests: `test_agent_loop_retries_transient_failure_then_succeeds` (1), `test_agent_loop_exhausts_turn_retry_budget` (3), `test_agent_loop_retry_backoff_delays_grow` (3), `test_agent_loop_turn_retry_disabled_with_zero_budget` (1), `test_agent_loop_cancel_during_retry_backoff_discards_partial` (1), and `test_agent_loop_cancel_during_reattempt_ends_run` (1). (The non-retryable error test uses `assistant_error`, not `retryable_error`; it is reworked in the bullet below.)
 - In `test_agent_loop_retries_transient_failure_then_succeeds`, add this assertion after the `retries[0].error_message` assertion:
 
 ```python
@@ -653,19 +653,21 @@ Delete the now-unused `_retry_failure_reason` function at the bottom of `_assist
 cd /workspace
 uv run ruff format src/tau_agent/loop.py src/tau_agent/provider_events.py \
   tests/pi_event_helpers.py tests/test_agent_loop.py tests/test_agent_harness.py
+uv run ruff check src/tau_agent/loop.py src/tau_agent/provider_events.py \
+  tests/pi_event_helpers.py tests/test_agent_loop.py tests/test_agent_harness.py
 uv run pytest tests/test_agent_loop.py tests/test_agent_harness.py tests/test_agent_retry.py -v
 ```
 
-Expected: all pass, including the new classification tests and the kept TUI-agnostic rollback assertions (`messages[-1] is recovered`, no error `MessageEndEvent`, attempt/max counts).
+Expected: all pass (including I001 import sorting), with the new classification tests and the kept TUI-agnostic rollback assertions (`messages[-1] is recovered`, no error `MessageEndEvent`, attempt/max counts).
 
 - [ ] **Step 9: Verify no feature `retryable` references remain**
 
 ```bash
 cd /workspace
-grep -rn "retryable" src/ tests/ --include=*.py | grep -v __pycache__ || true
+grep -rn "event\.retryable\|retryable_error\|retryable=\|retryable: bool" src/ tests/ --include=*.py | grep -v __pycache__ || true
 ```
 
-Expected: only the pre-existing upstream identifiers in restored `src/tau_ai/` (`_retryable_anthropic_stream_error`, `_retryable_stream_error_event`, `_is_retryable_status`) — verify each hit exists at `bc2d5a1` with `git show bc2d5a1:<path>` and leave it untouched. Any hit in `tau_agent/*` or `tests/pi_event_helpers.py` means a step above was missed.
+Expected: empty. NOTE — the word `retryable` itself legitimately remains in the codebase after this task: the new `failure_is_retryable` symbol in `src/tau_agent/retry.py`/`loop.py`/`tests/test_agent_retry.py` and the pre-existing `_retryable_*` identifiers in restored `src/tau_ai/` are all expected and must NOT be flagged; that is why the first pattern targets only the removed feature's call shapes. Any hit in `tau_agent/*` or `tests/pi_event_helpers.py` beyond those shapes means a step above was missed.
 
 Also note for later tasks: `TurnRetryStartEvent.error_type` (in `src/tau_agent/events.py`) is intentionally kept as a field even though the loop no longer sets it — removing it would churn the TUI/print/diagnostics consumers that read it; `log_turn_retry` already omits falsy `error_type` from the log entry.
 
@@ -960,16 +962,17 @@ async def test_auto_naming_failure_is_never_turn_retried(tmp_path: Path) -> None
 
     await _collect_session_events(session.prompt("Hello"))
 
+    assert len(provider.calls) == 2
     log_path = tau_paths.agent_calls_log_path
     entries = [
         json.loads(line)
         for line in log_path.read_text(encoding="utf-8").splitlines()
+        if "retry" in line
     ]
-    retry_entries = [entry for entry in entries if entry["kind"] == "assistant_retry"]
-    error_entries = [entry for entry in entries if entry["kind"] == "assistant_error"]
-    assert retry_entries == []
-    assert len(error_entries) == 1
+    assert all(entry["kind"] != "assistant_retry" for entry in entries)
 ```
+
+(Note: a failed auto-naming call surfaces as a session `log_exception` entry, not an `assistant_error` — the test's point is that one-shot calls never produce turn-retry entries, so the assertion checks exactly that.)
 
 - [ ] **Step 3: Adapt two restored session tests whose failing streams would now be retried**
 
@@ -1162,7 +1165,7 @@ exhausted or non-retryable failures reach this projection path.
 
 - [ ] **Step 3: Update the architecture note** — in `dev-notes/architecture/provider-retries.md`:
 
-- Replace the second paragraph (`Tau retries transient provider failures in \`tau_ai\`, where HTTP status codes and transport exceptions are visible. This keeps retry classification out of \`tau_agent\`...`) with:
+- Replace the first content paragraph (lines 5–7, after the frontmatter: `Tau retries transient provider failures in \`tau_ai\`, where HTTP status codes and transport exceptions are visible. This keeps retry classification out of \`tau_agent\`...`) with:
 
 ```markdown
 Tau retries transient provider failures in two places: the `tau_ai` adapters
@@ -1201,7 +1204,7 @@ retries are announced by `TurnRetryStartEvent` instead.
 
 - [ ] **Step 4: Update the website pages** (all current mentions were located with `grep -rn "turn_retry\|turn-retry\|turn-level retry" website/content/`):
 
-- `website/content/guides/sessions.md`: replace the retry paragraph (the one beginning `First retries with its configured \`max_retries\`` and ending `...project the terminal error`) with:
+- `website/content/guides/sessions.md`: replace the retry paragraph (the one beginning `The provider adapter first retries with its configured \`max_retries\`` and ending `...project the terminal error`) with:
 
 ```markdown
 Requests first retry with the provider's configured `max_retries`; if a
@@ -1248,12 +1251,12 @@ git commit -m "docs: document centrally classified turn-level retry"
 
 ```bash
 cd /workspace
-grep -rn "turn_retry_max\|turn-retry-max\|--turn-retry-max" src/ tests/ website/ || true
-grep -rn "retryable" src/ tests/ --include=*.py | grep -v __pycache__ || true
+grep -rn "turn_retry_max\|turn-retry-max\|--turn-retry-max\|turn_retry_max=" src/ tests/ website/ || true
+grep -rn "event\.retryable\|retryable_error\|retryable=\|retryable: bool" src/ tests/ --include=*.py | grep -v __pycache__ || true
 grep -rn "from tau_ai.classify\|tau_ai\.classify\|attach_tail_read_diagnostic" src/ tests/ || true
 ```
 
-Expected: empty (or only pre-feature lines confirmed against `bc2d5a1`).
+Expected: empty. (The new `failure_is_retryable` symbol and the pre-feature `_retryable_*` adapter identifiers are expected survivors and are not matched by these patterns.)
 
 - [ ] **Step 2: Full test suite**
 
