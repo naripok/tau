@@ -449,6 +449,7 @@ def transport_error(message: str, *, partial: str = "") -> AssistantErrorEvent:
 @pytest.mark.anyio
 async def test_agent_loop_does_not_retry_non_retryable_error() -> None:
     """Prove only centrally classified transient failures trigger a retry."""
+    messages: list[AgentMessage] = [UserMessage(content="hello")]
     provider = FakeProvider([[assistant_error("invalid api key", status_code=401)]])
 
     events = await _collect(
@@ -456,7 +457,7 @@ async def test_agent_loop_does_not_retry_non_retryable_error() -> None:
             provider=provider,
             model="fake",
             system="You are Tau.",
-            messages=[UserMessage(content="hello")],
+            messages=messages,
             tools=[],
             max_turn_retries=2,
         )
@@ -466,8 +467,6 @@ async def test_agent_loop_does_not_retry_non_retryable_error() -> None:
     assert len(provider.calls) == 1
     assert messages[-1].stop_reason == "error"
 ```
-
-and add `messages: list[AgentMessage] = [UserMessage(content="hello")]` above the `provider` line, then change the final assertion to use that variable. (Match the surrounding tests' style: `messages` is passed into `run_agent_loop` and read from after.)
 
 - [ ] **Step 3: Add the new loop-level classification tests** — append to `tests/test_agent_loop.py`:
 
