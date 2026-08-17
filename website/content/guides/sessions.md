@@ -83,12 +83,12 @@ already shown, including the `/resume` picker and id completions.
 Transient provider failures are retried automatically. The provider adapter
 first retries with its configured `max_retries`; if the failure outlives those
 attempts — for example a connection dropped mid-stream after partial output —
-Tau retries the whole turn up to the provider's `turn_retry_max` times
-(default `2`, `0` disables). Failed attempts are discarded: their partial text
-is rolled back from the transcript and never written to session history, and a
-transient “Connection lost — retrying N/M” notice appears until the reattempt
-streams. Only exhausted or non-transient failures (usage limits, context
-overflow, cancellation) project the terminal error.
+Tau retries the whole turn up to two more times. Failed attempts are
+discarded: their partial text is rolled back from the transcript and never
+written to session history, and a transient “Connection lost — retrying N/M”
+notice appears until the reattempt streams. Only exhausted or non-transient
+failures (usage limits, context overflow, non-transient statuses, cancellation)
+project the terminal error.
 
 Auto-naming makes one high-level provider request. The provider adapter may retry
 transient failures according to its configured `max_retries`. If those attempts

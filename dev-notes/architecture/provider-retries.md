@@ -2,9 +2,13 @@
 title: "Provider Retry Events"
 ---
 
-Tau retries transient provider failures in `tau_ai`, where HTTP status codes and
-transport exceptions are visible. This keeps retry classification out of
-`tau_agent` while still allowing the portable agent loop to surface progress.
+Tau retries transient provider failures in two places: the `tau_ai` adapters
+retry requests that emitted nothing (transient statuses, pre-content transport
+errors), and the agent turn loop (`tau_agent.loop`) retries whole turns when a
+failure survives the adapter — including mid-stream drops after partial
+content. Turn-level classification lives in `tau_agent.retry` and reads the
+`provider_error` diagnostics that adapters already attach to terminal errors,
+so adapters carry no retry-classification code.
 
 ## What Was Added
 
@@ -33,30 +37,25 @@ budget. Non-transient errors such as `authentication_error` or
 
 ## Turn-level retry on top of adapter retries
 
-Adapter retries only reissue requests that emitted nothing. Once the adapter
-budget is exhausted — or a failure arrives after partial content — the adapter
-produces a terminal `ProviderErrorEvent` classified with a `retryable` flag
-(see [`transient-error-retry.md`](../../2026-08-16-transient-error-retry.md)
-for the classification rules, shared markers in `tau_ai/classify.py`, and the
-per-provider `turn_retry_max` budget). The adapter never decides to turn-retry:
-that is the harness's job.
+Once the adapter budget is exhausted — or a failure arrives after partial
+content — the adapter produces a plain terminal `ProviderErrorEvent` with no
+classification. The harness loop classifies it centrally
+(`tau_agent.retry.failure_is_retryable`): cancelled runs, terminal rate-limit
+and context-overflow markers, and non-transient HTTP statuses are terminal;
+everything else is retried. See
+[`transient-error-retry.md`](../../2026-08-16-transient-error-retry.md) for the
+marker lists and the fixed two-retry budget.
 
-The harness loop (`tau_agent.loop`) consumes the `retryable` flag on
-`AssistantErrorEvent`: while reattempts are below the budget it discards the
-failed attempt (its terminal error event is suppressed and the partial content
-never enters history), emits `TurnRetryStartEvent`, waits a cancellable
-backoff, and reissues the provider call. `ProviderRetryEvent` metadata is
-provider-internal progress and is not forwarded across the Pi boundary into
-agent events; turn retries are announced by `TurnRetryStartEvent` instead.
+While reattempts are below the budget the loop discards the failed attempt (its
+terminal error event is suppressed and the partial content never enters
+history), emits `TurnRetryStartEvent`, waits a cancellable backoff, and
+reissues the provider call. `ProviderRetryEvent` metadata is provider-internal
+progress and is not forwarded across the Pi boundary into agent events; turn
+retries are announced by `TurnRetryStartEvent` instead.
 
-A transport error that arrives after the response's terminal marker (done
-marker, stream-stop event, or finish-reason chunk) is treated as a complete
-response: the run continues and the finished message carries a
-`response_tail_read` diagnostic instead of an error.
-
-Backoff is short, exponential, and capped by `max_retry_delay_seconds`.
-Cancellation is checked during the backoff delay so Escape/TUI cancellation does
-not wait for the entire retry sleep to finish.
+Backoff is short, exponential (base `0.25s`, doubling, capped at `1s`), and
+cancellation is checked during the delay so Escape/TUI cancellation does not
+wait for the entire retry sleep to finish.
 
 ## Rendering
 
@@ -66,8 +65,8 @@ final error.
 
 ## Boundary
 
-`tau_agent` does not decide whether an HTTP response is retryable. Adapters
-classify failures with the `retryable` flag; provider-specific details stay in
-the adapter's `data` payload for diagnostics. The harness owns the turn-level
-retry budget: how many reattempts happen, what consumers see in between, and
-what lands in history.
+Adapters decide their own pre-content retries with provider-specific markers;
+`ProviderRetryEvent` progress and the adapter's `data` payload stay in the
+provider layer for diagnostics. The agent layer owns the turn-level retry
+policy: classification, how many reattempts happen (a fixed budget of two),
+what consumers see in between, and what lands in history.

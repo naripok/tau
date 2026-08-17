@@ -128,7 +128,6 @@ Tau's setup mode registers an OpenAI-compatible provider. Put these flags before
 | `--timeout-seconds FLOAT` | `60.0` | HTTP timeout |
 | `--max-retries INT` | `2` | Retry count for transient failures |
 | `--max-retry-delay-seconds FLOAT` | `1.0` | Delay between retries |
-| `--turn-retry-max INT` | `2` | Turn-level retry count after adapter retries are exhausted |
 | `--set-default / --no-set-default` | set-default | Make this the default provider |
 
 Example:
