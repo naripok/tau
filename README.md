@@ -49,12 +49,12 @@ provider layer, session format, and extension API are untouched:
 
 ### Upstream sync
 
-- Forked from Tau `v0.3.10` and merged upstream `main` as of `95b7ca4`
-  (2026-08-17), now based on Tau `v0.3.11`. The latest sync brings in
-  print-mode session resume, TUI tool batching and compact bash invocations,
-  resource-conflict startup alerts, grouped write calls, grouped serialized
-  edit and write continuations, and a collapsible sidebar with refined resource
-  heading styles.
+- Forked from Tau `v0.3.10` and merged upstream `main` as of `37a9e43`
+  (2026-08-18), now based on Tau `v0.3.12`. The latest sync brings in
+  a headless Pi-compatible strict-JSONL RPC frontend (`tau rpc`),
+  `disable-model-invocation` user-only skills, and the preceding 0.3.11
+  round (print-mode session resume, tool batching, resource-conflict alerts,
+  grouped writes, collapsible sidebar).
 
 <p align="center">
   <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
