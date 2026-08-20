@@ -100,6 +100,7 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Stream one response as Pi-compatible assistant message events."""
         raw = self._stream_provider_events(
@@ -109,6 +110,7 @@ class OpenAICompatibleProvider:
             tools=tools,
             signal=signal,
             session_id=session_id,
+            seed=seed,
         )
         return canonicalize_provider_stream(
             raw,
@@ -126,6 +128,7 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one model response as provider-neutral events."""
         if self._config.api == "openai-responses" or _use_responses_api(model):
@@ -136,6 +139,7 @@ class OpenAICompatibleProvider:
                 tools=tools,
                 signal=signal,
                 session_id=session_id,
+                seed=seed,
             )
         return self._stream_chat_completions(
             model=model,
@@ -144,6 +148,7 @@ class OpenAICompatibleProvider:
             tools=tools,
             signal=signal,
             session_id=session_id,
+            seed=seed,
         )
 
     def _stream_chat_completions(
@@ -155,6 +160,7 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one chat completion response as provider-neutral events."""
         affinity_id = openai_prompt_cache_key(session_id)
@@ -172,6 +178,7 @@ class OpenAICompatibleProvider:
             include_reasoning_effort_none=self._config.include_reasoning_effort_none,
             supports_images=self._config.supports_images,
             prompt_cache_key=cache_key,
+            seed=seed,
         )
         return self._stream(
             model=model,
@@ -193,8 +200,10 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one `/v1/responses` response as provider-neutral events."""
+        del seed
         affinity_id = openai_prompt_cache_key(session_id)
         cache_key = self._prompt_cache_key(affinity_id)
         payload = _build_responses_payload(
@@ -796,6 +805,7 @@ def _build_chat_payload(
     include_reasoning_effort_none: bool = False,
     supports_images: bool = False,
     prompt_cache_key: str | None = None,
+    seed: int | None = None,
 ) -> dict[str, JSONValue]:
     resolved_compat = dict(compat or {})
     supports_store = bool(resolved_compat.get("supportsStore", True))
@@ -836,6 +846,8 @@ def _build_chat_payload(
         payload["tools"] = [_tool_to_openai(tool) for tool in tools]
         if resolved_compat.get("zaiToolStream") is True:
             payload["tool_stream"] = True
+    if seed is not None:
+        payload["seed"] = seed
     return payload
 
 

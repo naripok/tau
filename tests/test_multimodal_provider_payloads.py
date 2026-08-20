@@ -80,6 +80,30 @@ def test_openai_chat_attaches_tool_images_in_followup_user_message() -> None:
     assert payload["messages"][2]["content"][1]["type"] == "image_url"
 
 
+def test_build_chat_payload_includes_seed_when_set() -> None:
+    """Prove a seed travels into the chat payload, and None omits the key entirely.
+
+    The retry feature needs the seed serialized to the vLLM endpoint, while an
+    unseeded prompt must keep today's payload byte-identical (no seed key).
+    """
+    seeded = _build_chat_payload(
+        model="gpt",
+        system="system",
+        messages=[],
+        tools=[],
+        seed=42,
+    )
+    assert seeded["seed"] == 42
+
+    unseeded = _build_chat_payload(
+        model="gpt",
+        system="system",
+        messages=[],
+        tools=[],
+    )
+    assert "seed" not in unseeded
+
+
 def test_google_embeds_image_in_gemini_3_function_response() -> None:
     payload = _build_google_payload(
         model="gemini-3-pro",

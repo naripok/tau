@@ -217,9 +217,10 @@ class LoginRequiredProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Surface a login-needed provider error."""
-        del system, messages, tools, signal, session_id
+        del system, messages, tools, signal, session_id, seed
 
         async def iterator() -> AsyncIterator[AssistantMessageEvent]:
             error = AssistantMessage(

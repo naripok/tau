@@ -399,6 +399,100 @@ async def test_agent_loop_injects_steering_and_follow_up_messages() -> None:
 
 
 @pytest.mark.anyio
+async def test_loop_applies_seed_to_every_leg_of_the_prompt() -> None:
+    """Prove a seeded prompt streams the same seed on every leg of that prompt.
+
+    The loop must carry a per-prompt seed through the tool-call continuation
+    leg (tool call -> result -> continuation) so a retried turn uses the same
+    fresh random seed for every provider request it makes.
+    """
+
+    async def execute(
+        tool_call_id: str,
+        arguments: Mapping[str, JSONValue],
+        signal=None,  # noqa: ANN001
+        on_update=None,  # noqa: ANN001
+    ) -> AgentToolResult:
+        del tool_call_id, arguments, signal, on_update
+        return AgentToolResult(content="ok")
+
+    tool_call = ToolCall(id="call-1", name="read", arguments={"path": "README.md"})
+    first = AssistantMessage(content=[TextContent(text="Reading."), tool_call], model="fake")
+    final = AssistantMessage(content="Done.", model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), tool_call_end(tool_call), assistant_done(first, "toolUse")],
+            [assistant_start(), text_delta("Done."), assistant_done(final)],
+        ]
+    )
+    messages: list[AgentMessage] = [UserMessage(content="Read README.md")]
+
+    await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[_tool("read", execute)],
+            seed=7,
+        )
+    )
+
+    assert provider.seeds == [7, 7]
+
+
+@pytest.mark.anyio
+async def test_loop_applies_seed_across_steer_and_follow_up_injection() -> None:
+    """Prove a seeded prompt keeps its seed on injected steer/follow-up legs.
+
+    Messages queued mid-run drain into the running prompt stream, so their
+    provider calls must stay under the original prompt's seed; only a new
+    harness run starts a fresh (seedless or reseeded) stream.
+    """
+    call = ToolCall(id="call-1", name="work", arguments={})
+
+    async def execute(
+        tool_call_id: str,
+        arguments: Mapping[str, JSONValue],
+        signal=None,  # noqa: ANN001
+        on_update=None,  # noqa: ANN001
+    ) -> AgentToolResult:
+        del tool_call_id, arguments, signal, on_update
+        return AgentToolResult(content="ok")
+
+    first = AssistantMessage(content=[call], model="fake")
+    second = AssistantMessage(content="second", model="fake")
+    third = AssistantMessage(content="third", model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), tool_call_end(call), assistant_done(first, "toolUse")],
+            [assistant_start(), assistant_done(second)],
+            [assistant_start(), assistant_done(third)],
+        ]
+    )
+    steering = [UserMessage(content="steer")]
+    follow_up = [UserMessage(content="follow up")]
+
+    def pop(queue: list[UserMessage]) -> tuple[UserMessage, ...]:
+        return (queue.pop(0),) if queue else ()
+
+    await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=[UserMessage(content="start")],
+            tools=[_tool("work", execute)],
+            get_steering_messages=lambda: pop(steering),
+            get_follow_up_messages=lambda: pop(follow_up),
+            seed=7,
+        )
+    )
+
+    assert provider.seeds == [7, 7, 7]
+
+
+@pytest.mark.anyio
 async def test_agent_loop_stops_with_assistant_error_after_max_turns() -> None:
     call = ToolCall(id="call-1", name="missing", arguments={})
     assistant = AssistantMessage(content=[call], model="fake")

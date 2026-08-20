@@ -2035,6 +2035,7 @@ class CodingSession:
         source: Literal["interactive", "extension"] = "interactive",
         custom_type: str | None = None,
         details: dict[str, JSONValue] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[CodingSessionEvent]:
         """Append a user prompt, run the agent, and persist new messages.
 
@@ -2042,7 +2043,10 @@ class CodingSession:
         appended ``UserMessage`` (used when an extension delivers a custom
         message that starts an idle session's turn). ``source`` marks who
         initiated the turn for the `input` hook (``"extension"`` when an
-        extension started it, ``"interactive"`` otherwise).
+        extension started it, ``"interactive"`` otherwise). ``seed`` (when
+        provided) is forwarded to the provider for this prompt stream, letting
+        retried turns sample deterministically. Queued (steer/follow-up)
+        prompts never carry a seed.
         """
         context = self._diagnostic_context()
         input_outcome = await self._extension_runtime.run_input_hooks(
@@ -2102,7 +2106,7 @@ class CodingSession:
                 )
             else:
                 prompt_message = UserMessage(content=expanded_content)
-            events = self._harness.prompt_message(prompt_message)
+            events = self._harness.prompt_message(prompt_message, seed=seed)
             self._invalidate_context_usage_cache()
             async for event in events:
                 auto_name_message: str | None = None

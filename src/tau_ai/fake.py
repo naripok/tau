@@ -17,6 +17,7 @@ class FakeProvider:
         self._streams = [list(stream) for stream in streams]
         self.calls: list[tuple[str, str, list[AgentMessage], list[AgentTool]]] = []
         self.session_ids: list[str | None] = []
+        self.seeds: list[int | None] = []
 
     def stream_response(
         self,
@@ -27,9 +28,11 @@ class FakeProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         self.calls.append((model, system, list(messages), list(tools)))
         self.session_ids.append(session_id)
+        self.seeds.append(seed)
         stream = self._streams.pop(0) if self._streams else []
 
         async def iterator() -> AsyncIterator[AssistantMessageEvent]:

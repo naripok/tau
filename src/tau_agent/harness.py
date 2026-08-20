@@ -148,10 +148,12 @@ class AgentHarness:
     def pop_latest_steering(self) -> AgentMessage | None:
         return self._steering_queue.pop() if self._steering_queue else None
 
-    def prompt_message(self, message: AgentMessage) -> AsyncIterator[AgentEvent]:
+    def prompt_message(
+        self, message: AgentMessage, *, seed: int | None = None
+    ) -> AsyncIterator[AgentEvent]:
         self._ensure_not_running()
         self._running = True
-        return self._run(prompts=(message,))
+        return self._run(prompts=(message,), seed=seed)
 
     def prompt(self, content: str) -> AsyncIterator[AgentEvent]:
         return self.prompt_message(UserMessage(content=content))
@@ -165,6 +167,7 @@ class AgentHarness:
         self,
         *,
         prompts: Sequence[AgentMessage] = (),
+        seed: int | None = None,
     ) -> AsyncIterator[AgentEvent]:
         signal = SimpleCancellationToken()
         self._current_signal = signal
@@ -187,6 +190,7 @@ class AgentHarness:
                 max_turn_retries=self._config.max_turn_retries,
                 signal=signal,
                 session_id=self._config.session_id,
+                seed=seed,
                 get_steering_messages=self._drain_steering_messages,
                 get_follow_up_messages=self._drain_follow_up_messages,
                 before_tool_call=self._config.before_tool_call,

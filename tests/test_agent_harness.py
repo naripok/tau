@@ -24,6 +24,7 @@ from tau_agent import (
     ToolCall,
     ToolResultMessage,
     TurnRetryStartEvent,
+    UserMessage,
 )
 from tau_agent.types import JSONValue
 from tau_ai import FakeProvider
@@ -59,6 +60,30 @@ async def test_prompt_appends_user_and_assistant_with_pi_lifecycle() -> None:
     starts = [event for event in events if isinstance(event, MessageStartEvent)]
     assert [event.message.role for event in starts] == ["user", "assistant"]
     assert _texts(harness) == [("user", "Hi"), ("assistant", "Hello")]
+
+
+@pytest.mark.anyio
+async def test_harness_prompt_message_forwards_seed() -> None:
+    """Prove prompt_message forwards an optional seed and defaults to None.
+
+    The taweb retry button re-sends a user message with a fresh random seed;
+    the harness is the seam from the UI prompt down to the provider call, so it
+    must deliver the seed as-is and record None when the UI omits it.
+    """
+    provider = FakeProvider(
+        [
+            [assistant_start(), assistant_done(AssistantMessage(content="Hello"))],
+            [assistant_start(), assistant_done(AssistantMessage(content="Hi"))],
+        ]
+    )
+    harness = AgentHarness(
+        AgentHarnessConfig(provider=provider, model="fake", system="You are Tau.")
+    )
+
+    _ = [event async for event in harness.prompt_message(UserMessage(content="One"), seed=7)]
+    _ = [event async for event in harness.prompt_message(UserMessage(content="Two"))]
+
+    assert provider.seeds == [7, None]
 
 
 @pytest.mark.anyio

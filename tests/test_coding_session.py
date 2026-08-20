@@ -139,8 +139,9 @@ class RaisingProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
-        del model, system, messages, tools, signal, session_id
+        del model, system, messages, tools, signal, session_id, seed
         self.call_count += 1
         should_fail = self.call_count == self.fail_on_call
 
@@ -169,8 +170,9 @@ class WaitingProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
-        del model, system, tools, signal, session_id
+        del model, system, tools, signal, session_id, seed
         call_index = self.call_count
         self.call_count += 1
         self.calls.append(list(messages))
@@ -203,8 +205,9 @@ class CancellableWaitingProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
-        del model, system, tools, session_id
+        del model, system, tools, session_id, seed
         self.calls.append(list(messages))
 
         async def iterator() -> AsyncIterator[AssistantMessageEvent]:
@@ -2493,6 +2496,53 @@ async def test_session_auto_name_falls_back_when_provider_returns_unusable_title
     renamed = manager.get_session(record.id)
     assert renamed is not None
     assert renamed.title == "Debug failing model picker"
+
+
+@pytest.mark.anyio
+async def test_session_prompt_forwards_seed(tmp_path: Path) -> None:
+    """Prove session.prompt forwards a per-prompt seed to its provider stream.
+
+    The taweb retry button re-sends a user message with a fresh random seed; it
+    must reach the provider call that backs that prompt only. The session's
+    auto-naming request is a separate provider call that SHALL stay seedless.
+    """
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    record = manager.create_session(cwd=tmp_path, model="fake")
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=AssistantMessage(content="Generated title")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=AssistantMessage(content="First answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=AssistantMessage(content="Second answer")),
+            ],
+        ]
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            session_id=record.id,
+            session_manager=manager,
+        )
+    )
+
+    await _collect_session_events(session.prompt("First", seed=5))
+    await _collect_session_events(session.prompt("Second"))
+
+    # Call order: auto-naming first (seedless), then the seeded prompt stream,
+    # then the unseeded prompt stream.
+    assert provider.seeds == [None, 5, None]
 
 
 @pytest.mark.anyio

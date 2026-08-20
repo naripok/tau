@@ -28,10 +28,13 @@ class ModelProvider(Protocol):
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Stream one model response as assistant message events.
 
         Providers may use ``session_id`` for request routing or prompt-cache
-        affinity. Unsupported providers ignore it.
+        affinity. ``seed`` (when provided) asks the provider to make sampling
+        deterministic for retried prompts. Providers without seed support
+        SHALL ignore it.
         """
         ...

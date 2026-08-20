@@ -61,12 +61,18 @@ async def run_agent_loop(
     max_turn_retries: int = 0,
     signal: CancellationToken | None = None,
     session_id: str | None = None,
+    seed: int | None = None,
     get_steering_messages: Callable[[], Sequence[AgentMessage]] | None = None,
     get_follow_up_messages: Callable[[], Sequence[AgentMessage]] | None = None,
     before_tool_call: BeforeToolCall | None = None,
     after_tool_call: AfterToolCall | None = None,
 ) -> AsyncIterator[AgentEvent]:
-    """Run the provider/tool loop and emit Pi-compatible agent events."""
+    """Run the provider/tool loop and emit Pi-compatible agent events.
+
+    ``seed`` (when provided) is forwarded to every provider request the loop
+    makes while running this prompt stream, including continuation legs after
+    tool execution, so retried turns sample deterministically.
+    """
     new_messages = list(prompts)
     if prompts:
         messages.extend(prompts)
@@ -131,6 +137,7 @@ async def run_agent_loop(
                 tools=tools,
                 signal=signal,
                 session_id=session_id,
+                seed=seed,
                 max_turn_retries=max_turn_retries,
             ):
                 yield event
@@ -211,6 +218,7 @@ async def _assistant_events(
     tools: list[AgentTool],
     signal: CancellationToken | None,
     session_id: str | None,
+    seed: int | None,
     max_turn_retries: int,
 ) -> AsyncIterator[AgentEvent]:
     """Stream one turn's provider response, retrying transient failures.
@@ -229,6 +237,7 @@ async def _assistant_events(
             tools=tools,
             signal=signal,
             session_id=session_id,
+            seed=seed,
         )
         started = False
         retry_failure: AssistantMessage | None = None

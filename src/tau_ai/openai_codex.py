@@ -141,8 +141,10 @@ class OpenAICodexProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Stream one response as Pi-compatible assistant message events."""
+        del seed
         raw = self._stream_provider_events(
             model=model,
             system=system,
