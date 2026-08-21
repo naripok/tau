@@ -5,7 +5,7 @@
 ## Fork changes
 
 Everything below is relative to upstream `huggingface/tau` as of the latest
-upstream sync (`95b7ca4`, 2026-08-17). Details live in `dev-notes/` (see
+upstream sync (`62eab4e`, 2026-08-21). Details live in `dev-notes/` (see
 [`dev-notes/tui-responsiveness-perf.md`](dev-notes/tui-responsiveness-perf.md)
 and [`dev-notes/auto-compact-percent.md`](dev-notes/auto-compact-percent.md)).
 
@@ -49,12 +49,13 @@ provider layer, session format, and extension API are untouched:
 
 ### Upstream sync
 
-- Forked from Tau `v0.3.10` and merged upstream `main` as of `37a9e43`
-  (2026-08-18), now based on Tau `v0.3.12`. The latest sync brings in
-  a headless Pi-compatible strict-JSONL RPC frontend (`tau rpc`),
-  `disable-model-invocation` user-only skills, and the preceding 0.3.11
-  round (print-mode session resume, tool batching, resource-conflict alerts,
-  grouped writes, collapsible sidebar).
+- Forked from Tau `v0.3.10` and merged upstream `main` as of `62eab4e`
+  (2026-08-21), now based on Tau `v0.3.13`. The latest sync brings in
+  Pi prompt argument variables, the `tau install` command (Pi-style
+  extension installer), agent settlement after interrupted runs,
+  narrow-TUI prompt rendering fixes, and the preceding 0.3.12 round
+  (headless Pi-compatible RPC frontend, `disable-model-invocation`
+  skills, 0.3.11 features).
 
 <p align="center">
   <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
@@ -74,6 +75,10 @@ provider layer, session format, and extension API are untouched:
   <a href="https://pypi.org/project/tau-ai/">PyPI</a>
   ·
   <a href="https://github.com/huggingface/tau/issues/1">Roadmap</a>
+</p>
+
+<p align="center">
+  <strong><a href="https://link.alejandro-ao.com/tau-discord">Join the Tau Discord community →</a></strong>
 </p>
 
 ---
