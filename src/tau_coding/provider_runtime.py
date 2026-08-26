@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from asyncio import AbstractEventLoop, get_running_loop
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
+from contextlib import contextmanager
 from dataclasses import replace
+from importlib.util import find_spec
 from os import environ
-from typing import Protocol
+from pathlib import Path
+from typing import IO, Protocol
 from weakref import WeakKeyDictionary
 
 from tau_agent.provider import ModelProvider
@@ -259,12 +263,13 @@ class OpenAICodexCredentialResolver:
         if not oauth_credential_is_expired(credential):
             return credential
         async with _refresh_lock(credential_name):
-            stored = self._credential_store.get_oauth(credential_name) or credential
-            if not oauth_credential_is_expired(stored):
-                return stored
-            refreshed = await refresh_openai_codex_token(stored.refresh)
-            if refreshed != stored:
-                self._credential_store.set_oauth(credential_name, refreshed)
+            with _file_refresh_lock(self._credential_store.path):
+                stored = self._credential_store.get_oauth(credential_name) or credential
+                if not oauth_credential_is_expired(stored):
+                    return stored
+                refreshed = await refresh_openai_codex_token(stored.refresh)
+                if refreshed != stored:
+                    self._credential_store.set_oauth(credential_name, refreshed)
         return refreshed
 
 
@@ -296,6 +301,68 @@ def _refresh_lock(credential_name: str) -> asyncio.Lock:
     return lock
 
 
+@contextmanager
+def _file_refresh_lock(store_path: Path) -> Iterator[None]:
+    """Serialize credential refresh across processes sharing one store.
+
+    Two processes on the same project volume share one credential file, and
+    the in-process ``asyncio.Lock`` does not reach across processes. An
+    exclusive advisory lock on ``<store_path>.lock`` held across the re-read,
+    refresh, and write keeps a rotated refresh token spent at most once: the
+    loser of the lock re-reads the rotated credential and skips its own
+    refresh. The lock file is a persistent sibling of the credential file;
+    deleting it reopens the race, so nothing removes it.
+
+    A platform with no ``flock`` or ``msvcrt`` primitive has no cross-process
+    lock and keeps the in-process lock as the only serialization; on every
+    platform with a primitive, an ``OSError`` from opening or locking the
+    file is a hard error so a refresh never proceeds unlocked.
+    """
+    lock_path = Path(f"{store_path}.lock")
+    primitive = "msvcrt" if os.name == "nt" else "fcntl"
+    if find_spec(primitive) is None:
+        yield
+        return
+    handle = lock_path.open("a+b")
+    try:
+        _lock_refresh_file(handle)
+        try:
+            yield
+        finally:
+            _unlock_refresh_file(handle)
+    finally:
+        handle.close()
+
+
+def _lock_refresh_file(handle: IO[bytes]) -> None:
+    """Lock ``handle`` exclusively; an ``OSError`` propagates to the caller."""
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_refresh_file(handle: IO[bytes]) -> None:
+    """Release the advisory lock; closing ``handle`` releases it either way."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
 def _oauth_credential(
     provider: ProviderConfig,
     credential_store: FileCredentialStore,
@@ -323,17 +390,19 @@ class OAuthRuntimeCredentialResolver:
             raise RuntimeError(f"Provider {self._provider.name} has no credential name")
         oauth_provider = _required_oauth_provider(self._provider.name)
         async with _refresh_lock(credential_name):
-            # Read inside the lock: a task that waited here while another
-            # refreshed sees the rotated credential and skips its own refresh.
-            credential = self._credential_store.get_oauth(credential_name)
-            if credential is None:
-                raise RuntimeError(
-                    f"Missing OAuth credentials for {self._provider.name}. "
-                    f"Run /login {self._provider.name}."
-                )
-            refreshed = await oauth_provider.refresh(credential)
-            if refreshed != credential:
-                self._credential_store.set_oauth(credential_name, refreshed)
+            with _file_refresh_lock(self._credential_store.path):
+                # Read inside the locks: a task or process that waited here
+                # while another refreshed sees the rotated credential and
+                # skips its own refresh.
+                credential = self._credential_store.get_oauth(credential_name)
+                if credential is None:
+                    raise RuntimeError(
+                        f"Missing OAuth credentials for {self._provider.name}. "
+                        f"Run /login {self._provider.name}."
+                    )
+                refreshed = await oauth_provider.refresh(credential)
+                if refreshed != credential:
+                    self._credential_store.set_oauth(credential_name, refreshed)
         auth = oauth_provider.runtime_auth(refreshed)
         return RuntimeProviderAuth(
             api_key=auth.api_key,

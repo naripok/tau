@@ -1,10 +1,21 @@
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from tau_ai import AnthropicProvider, OpenAICodexProvider, OpenAICompatibleProvider
 from tau_coding import provider_runtime
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
+from tau_coding.oauth_registry import (
+    register_oauth_provider,
+    reset_oauth_providers,
+    unregister_oauth_provider,
+)
+from tau_coding.oauth_types import OAuthLoginCallbacks, OAuthProvider, OAuthRuntimeAuth
 from tau_coding.provider_config import (
     AnthropicProviderConfig,
     OpenAICodexProviderConfig,
@@ -14,7 +25,73 @@ from tau_coding.provider_config import (
     provider_config_from_catalog_entry,
     resolve_startup_thinking_level,
 )
-from tau_coding.provider_runtime import OpenAICodexCredentialResolver, create_model_provider
+from tau_coding.provider_runtime import (
+    OAuthRuntimeCredentialResolver,
+    OpenAICodexCredentialResolver,
+    _file_refresh_lock,
+    create_model_provider,
+)
+
+_CROSS_PROCESS_REFRESH_SCRIPT = """
+import asyncio
+import sys
+import time
+from pathlib import Path
+
+from tau_coding import provider_runtime
+from tau_coding.credentials import FileCredentialStore, OAuthCredential
+from tau_coding.provider_config import OpenAICodexProviderConfig
+from tau_coding.provider_runtime import OpenAICodexCredentialResolver
+
+store_path = Path(sys.argv[1])
+ready_dir = Path(sys.argv[2])
+refresh_log = Path(sys.argv[3])
+result_path = Path(sys.argv[4])
+index = sys.argv[5]
+
+
+async def fake_refresh(refresh_token: str) -> OAuthCredential:
+    # Emulate a rotating authorization server: the first use of a refresh
+    # token succeeds and records the spend; any later use is rejected.
+    with refresh_log.open("a+", encoding="utf-8") as handle:
+        handle.seek(0)
+        spent = handle.read()
+        handle.write(refresh_token + "\\n")
+        handle.flush()
+    if refresh_token in spent:
+        raise RuntimeError(f"refresh_token_reused: {refresh_token}")
+    await asyncio.sleep(1.0)
+    return OAuthCredential(
+        access="access-2",
+        refresh="refresh-2",
+        expires=9999999999999,
+        account_id="acct-2",
+    )
+
+
+provider_runtime.refresh_openai_codex_token = fake_refresh
+
+# Rendezvous: both processes call the resolver at the same time, so an
+# unlocked implementation reads the stale credential in both before either
+# refreshes.
+(ready_dir / f"ready-{index}").write_text("")
+deadline = time.monotonic() + 30
+while len(list(ready_dir.glob("ready-*"))) < 2:
+    if time.monotonic() > deadline:
+        raise SystemExit("timed out waiting for the sibling process")
+    time.sleep(0.01)
+
+resolver = OpenAICodexCredentialResolver(
+    OpenAICodexProviderConfig(),
+    credential_store=FileCredentialStore(store_path),
+)
+try:
+    credentials = asyncio.run(resolver())
+except BaseException as exc:
+    result_path.write_text(f"ERROR: {type(exc).__name__}: {exc}")
+    raise
+result_path.write_text(f"{credentials.access_token}\\n{credentials.account_id}")
+"""
 
 
 def test_create_model_provider_returns_openai_codex_provider(tmp_path) -> None:
@@ -448,3 +525,205 @@ async def test_openai_codex_credential_resolver_refreshes_expired_credentials(
         expires=9999999999999,
         account_id="new-account",
     )
+
+
+def test_cross_process_refresh_spends_rotating_token_once(tmp_path) -> None:
+    """Two OS processes sharing one store must spend a rotated token once.
+
+    The in-process ``asyncio.Lock`` serializes tasks inside one process only:
+    two processes reading the same expired credential both spend the same
+    refresh token and one gets ``refresh_token_reused``. Both refreshes run
+    in separate OS processes (subprocesses), synchronized by a ready
+    rendezvous so both read the stale credential before either writes. The
+    network refresh is emulated as a rotating server: the first use of a
+    refresh token succeeds and records itself, any later use is rejected.
+    """
+    store_path = tmp_path / "credentials.json"
+    FileCredentialStore(store_path).set_oauth(
+        "openai-codex",
+        OAuthCredential(
+            access="old-access",
+            refresh="refresh-1",
+            expires=1,
+            account_id="old-account",
+        ),
+    )
+    ready_dir = tmp_path / "ready"
+    ready_dir.mkdir()
+    refresh_log = tmp_path / "refreshes.log"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _CROSS_PROCESS_REFRESH_SCRIPT,
+                str(store_path),
+                str(ready_dir),
+                str(refresh_log),
+                str(tmp_path / f"result-{index}"),
+                index,
+            ],
+            env=env,
+        )
+        for index in ("0", "1")
+    ]
+    try:
+        for process in processes:
+            assert process.wait(timeout=60) == 0
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    results = {index: (tmp_path / f"result-{index}").read_text() for index in ("0", "1")}
+    assert results == {"0": "access-2\nacct-2", "1": "access-2\nacct-2"}
+    assert refresh_log.read_text() == "refresh-1\n"
+    assert Path(f"{store_path}.lock").exists()
+
+
+@pytest.mark.anyio
+async def test_codex_resolver_holds_the_file_lock_during_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The file lock wraps the codex re-read, network refresh, and write."""
+    store = FileCredentialStore(tmp_path / "credentials.json")
+    store.set_oauth(
+        "openai-codex",
+        OAuthCredential(
+            access="old-access",
+            refresh="old-refresh",
+            expires=1,
+            account_id="old-account",
+        ),
+    )
+
+    async def fake_refresh(refresh_token: str) -> OAuthCredential:
+        assert refresh_token == "old-refresh"
+        # The sibling lock file exists while the network refresh runs; an
+        # unlocked implementation never creates it.
+        assert Path(f"{store.path}.lock").exists()
+        return OAuthCredential(
+            access="new-access",
+            refresh="new-refresh",
+            expires=9999999999999,
+            account_id="new-account",
+        )
+
+    monkeypatch.setattr(provider_runtime, "refresh_openai_codex_token", fake_refresh)
+
+    resolver = OpenAICodexCredentialResolver(
+        OpenAICodexProviderConfig(),
+        credential_store=store,
+    )
+
+    credentials = await resolver()
+
+    assert credentials.access_token == "new-access"
+    assert Path(f"{store.path}.lock").exists()
+
+
+@pytest.mark.anyio
+async def test_runtime_oauth_resolver_holds_the_file_lock_during_refresh(
+    tmp_path,
+) -> None:
+    """The file lock wraps the OAuth runtime re-read, refresh, and write."""
+    store = FileCredentialStore(tmp_path / "credentials.json")
+    store.set_oauth(
+        "github-copilot",
+        OAuthCredential(access="old", refresh="github-token", expires=1),
+    )
+
+    class FakeOAuthProvider:
+        id = "github-copilot"
+        name = "Fake GitHub Copilot"
+        flow_kinds = ("device_code",)
+
+        async def login(self, _callbacks: OAuthLoginCallbacks) -> OAuthCredential:
+            raise AssertionError("not used")
+
+        async def refresh(self, credential: OAuthCredential) -> OAuthCredential:
+            # The sibling lock file exists while the network refresh runs; an
+            # unlocked implementation never creates it.
+            assert Path(f"{store.path}.lock").exists()
+            return OAuthCredential(
+                access="new-access",
+                refresh="new-refresh",
+                expires=9999999999999,
+            )
+
+        def runtime_auth(self, credential: OAuthCredential) -> OAuthRuntimeAuth:
+            return OAuthRuntimeAuth(api_key=credential.access)
+
+    provider = provider_config_from_catalog_entry("github-copilot")
+    register_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
+    try:
+        auth = await OAuthRuntimeCredentialResolver(provider, credential_store=store)()
+    finally:
+        unregister_oauth_provider("github-copilot")
+        reset_oauth_providers()
+
+    assert auth.api_key == "new-access"
+    assert Path(f"{store.path}.lock").exists()
+
+
+def test_file_refresh_lock_is_a_persistent_sibling_of_the_store(tmp_path) -> None:
+    """The cross-process lock lives at ``<store_path>.lock`` and releases on exit."""
+    store_path = tmp_path / "credentials.json"
+    lock_path = Path(f"{store_path}.lock")
+
+    with _file_refresh_lock(store_path):
+        assert lock_path.exists()
+
+    # The lock file persists after the refresh: deleting it after unlock
+    # reopens the race between the unlock and the next process's open.
+    assert lock_path.exists()
+    # A second acquisition blocks indefinitely if the first exit leaked the
+    # lock, so re-acquiring proves the lock was released.
+    with _file_refresh_lock(store_path):
+        pass
+
+
+@pytest.mark.anyio
+async def test_oauth_runtime_refresh_fails_when_the_file_lock_is_unavailable(
+    tmp_path,
+) -> None:
+    """A failed lock acquisition fails the refresh; it never proceeds unlocked.
+
+    An unlocked refresh risks spending a rotated token twice, so on platforms
+    with ``flock``/``msvcrt`` an ``OSError`` opening the lock file surfaces as
+    a refresh error instead of a silent unlocked run.
+    """
+    store = FileCredentialStore(tmp_path / "credentials.json")
+    store.set_oauth(
+        "github-copilot",
+        OAuthCredential(access="old", refresh="github-token", expires=1),
+    )
+    # A directory at the lock path makes open() raise OSError.
+    Path(f"{store.path}.lock").mkdir()
+
+    class FakeOAuthProvider:
+        id = "github-copilot"
+        name = "Fake GitHub Copilot"
+        flow_kinds = ("device_code",)
+
+        async def login(self, _callbacks: OAuthLoginCallbacks) -> OAuthCredential:
+            raise AssertionError("not used")
+
+        async def refresh(self, credential: OAuthCredential) -> OAuthCredential:
+            raise AssertionError("refresh must not run unlocked")
+
+        def runtime_auth(self, credential: OAuthCredential) -> OAuthRuntimeAuth:
+            raise AssertionError("not used")
+
+    provider = provider_config_from_catalog_entry("github-copilot")
+    register_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
+    resolver = OAuthRuntimeCredentialResolver(provider, credential_store=store)
+    try:
+        with pytest.raises(OSError):
+            await resolver()
+    finally:
+        unregister_oauth_provider("github-copilot")
+        reset_oauth_providers()
