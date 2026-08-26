@@ -262,7 +262,9 @@ class OpenAICodexCredentialResolver:
     ) -> OAuthCredential:
         if not oauth_credential_is_expired(credential):
             return credential
-        async with _refresh_lock(credential_name):
+        async with _refresh_lock(credential_name), _refresh_file_lock(
+            self._credential_store.path
+        ):
             with _file_refresh_lock(self._credential_store.path):
                 stored = self._credential_store.get_oauth(credential_name) or credential
                 if not oauth_credential_is_expired(stored):
@@ -298,6 +300,38 @@ def _refresh_lock(credential_name: str) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         locks[credential_name] = lock
+    return lock
+
+
+_REFRESH_FILE_LOCKS: MutableMapping[AbstractEventLoop, dict[str, asyncio.Lock]] = (
+    WeakKeyDictionary()
+)
+
+
+def _refresh_file_lock(store_path: Path) -> asyncio.Lock:
+    """Return this loop's same-process gate for one credential store path.
+
+    Two credential names on one store pass their distinct per-name locks
+    concurrently and then contend on the same cross-process file lock. The
+    blocking ``flock`` runs on the loop thread while the file lock is held
+    across an ``await`` (the network refresh); a second task that reaches
+    ``flock`` freezes the loop and the file-lock holder together: a
+    same-process deadlock. This gate lets only one task per store path
+    reach the file lock, so the blocking ``flock`` waits only on other
+    processes. Locks are acquired in this order: per-name refresh lock,
+    per-path gate, then the file lock.
+
+    Gates are cached per event loop because ``asyncio.Lock`` binds to the
+    running loop on first contention: a gate cached across loops appears to
+    work — the uncontended path never touches the loop — until two tasks
+    contend it in a later loop and it raises.
+    """
+    locks = _REFRESH_FILE_LOCKS.setdefault(get_running_loop(), {})
+    key = str(store_path)
+    lock = locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[key] = lock
     return lock
 
 
@@ -389,7 +423,9 @@ class OAuthRuntimeCredentialResolver:
         if credential_name is None:
             raise RuntimeError(f"Provider {self._provider.name} has no credential name")
         oauth_provider = _required_oauth_provider(self._provider.name)
-        async with _refresh_lock(credential_name):
+        async with _refresh_lock(credential_name), _refresh_file_lock(
+            self._credential_store.path
+        ):
             with _file_refresh_lock(self._credential_store.path):
                 # Read inside the locks: a task or process that waited here
                 # while another refreshed sees the rotated credential and

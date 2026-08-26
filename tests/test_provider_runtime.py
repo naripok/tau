@@ -93,6 +93,64 @@ except BaseException as exc:
 result_path.write_text(f"{credentials.access_token}\\n{credentials.account_id}")
 """
 
+_SAME_STORE_CONCURRENT_REFRESH_SCRIPT = """
+import asyncio
+import sys
+from pathlib import Path
+
+from tau_coding import provider_runtime
+from tau_coding.credentials import FileCredentialStore, OAuthCredential
+from tau_coding.provider_config import OpenAICodexProviderConfig
+from tau_coding.provider_runtime import OpenAICodexCredentialResolver
+
+store_path = Path(sys.argv[1])
+result_path = Path(sys.argv[2])
+
+
+async def fake_refresh(refresh_token: str) -> OAuthCredential:
+    # Slow network refresh: long enough that the second task, past the
+    # per-name lock, reaches the file lock while the first still holds it.
+    await asyncio.sleep(1.0)
+    return OAuthCredential(
+        access=f"new-{refresh_token}",
+        refresh=f"fresh-{refresh_token}",
+        expires=9999999999999,
+        account_id=f"acct-{refresh_token}",
+    )
+
+
+provider_runtime.refresh_openai_codex_token = fake_refresh
+
+store = FileCredentialStore(store_path)
+store.set_oauth(
+    "codex-a",
+    OAuthCredential(access="old-a", refresh="refresh-a", expires=1, account_id="acct-a"),
+)
+store.set_oauth(
+    "codex-b",
+    OAuthCredential(access="old-b", refresh="refresh-b", expires=1, account_id="acct-b"),
+)
+
+
+async def main() -> None:
+    def resolver(credential_name: str) -> OpenAICodexCredentialResolver:
+        return OpenAICodexCredentialResolver(
+            OpenAICodexProviderConfig(credential_name=credential_name),
+            credential_store=store,
+        )
+
+    async def refresh(credential_name: str) -> str:
+        credentials = await resolver(credential_name)()
+        return credentials.access_token
+
+    async with asyncio.timeout(20):
+        results = await asyncio.gather(refresh("codex-a"), refresh("codex-b"))
+    result_path.write_text("\\n".join(results))
+
+
+asyncio.run(main())
+"""
+
 
 def test_create_model_provider_returns_openai_codex_provider(tmp_path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
@@ -581,6 +639,57 @@ def test_cross_process_refresh_spends_rotating_token_once(tmp_path) -> None:
     assert results == {"0": "access-2\nacct-2", "1": "access-2\nacct-2"}
     assert refresh_log.read_text() == "refresh-1\n"
     assert Path(f"{store_path}.lock").exists()
+
+
+def test_same_process_concurrent_refresh_on_one_store_does_not_deadlock(
+    tmp_path,
+) -> None:
+    """Two expired credential names on one store refresh concurrently.
+
+    Two tasks refresh different credential names, so both pass the per-name
+    locks. The first task holds the file lock across its network refresh. A
+    second task without a per-path gate blocks the loop thread inside
+    ``flock`` while the file-lock owner waits on that same loop: the process
+    hangs. The per-path gate serializes both tasks before the file lock, so
+    ``flock`` only waits on other processes.
+
+    The pre-fix hang freezes the loop thread, so an ``asyncio.timeout`` in
+    the scenario never fires: the scenario runs in a subprocess whose hard
+    wait timeout turns the permanent hang into a fast test failure.
+    """
+    store_path = tmp_path / "credentials.json"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _SAME_STORE_CONCURRENT_REFRESH_SCRIPT,
+            str(store_path),
+            str(tmp_path / "result.txt"),
+        ],
+        env=env,
+    )
+    try:
+        assert process.wait(timeout=20) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+
+    assert (tmp_path / "result.txt").read_text() == "new-refresh-a\nnew-refresh-b"
+    store = FileCredentialStore(store_path)
+    assert store.get_oauth("codex-a") == OAuthCredential(
+        access="new-refresh-a",
+        refresh="fresh-refresh-a",
+        expires=9999999999999,
+        account_id="acct-refresh-a",
+    )
+    assert store.get_oauth("codex-b") == OAuthCredential(
+        access="new-refresh-b",
+        refresh="fresh-refresh-b",
+        expires=9999999999999,
+        account_id="acct-refresh-b",
+    )
 
 
 @pytest.mark.anyio
