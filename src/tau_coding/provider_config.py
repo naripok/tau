@@ -1162,6 +1162,7 @@ def _catalog_model_metadata_from_provider(
             cost_tiers=metadata.cost_tiers,
             context_window=metadata.context_window,
             max_tokens=metadata.max_tokens,
+            auto_compact_percent=metadata.auto_compact_percent,
             headers=dict(metadata.headers),
             compat=dict(metadata.compat),
             thinking_level_map=dict(metadata.thinking_level_map),

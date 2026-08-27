@@ -480,6 +480,77 @@ def test_provider_model_auto_compact_percent_round_trips_through_json() -> None:
     assert provider.model_metadata["qwen"].to_json()["auto_compact_percent"] == 80
 
 
+def test_provider_model_auto_compact_percent_round_trips_through_catalog_toml(
+    tmp_path: Path,
+) -> None:
+    """Prove a saved auto_compact_percent survives the catalog.toml rewrite.
+
+    Model switches persist the default model choice, which rewrites the user
+    catalog from runtime provider configs. If the rewrite drops the percent,
+    the effective compaction threshold silently changes across rotations.
+    """
+    tau_home = tmp_path / ".tau"
+    tau_home.mkdir()
+    (tau_home / "catalog.toml").write_text(
+        "\n".join(
+            [
+                "schema_version = 1",
+                "",
+                "[[providers]]",
+                'name = "local"',
+                'display_name = "Local"',
+                'kind = "openai-compatible"',
+                'base_url = "http://localhost:11434/v1"',
+                'api_key_env = "LOCAL_API_KEY"',
+                'credential_name = "local"',
+                'models = ["qwen"]',
+                'default_model = "qwen"',
+                'docs_url = "http://localhost:11434/v1"',
+                'thinking_levels = ["low", "medium", "xhigh"]',
+                "",
+                "[providers.context_windows]",
+                '"qwen" = 171000',
+                "",
+                '[providers.model_metadata."qwen"]',
+                'input = ["text"]',
+                "max_tokens = 32768",
+                "auto_compact_percent = 73",
+            ]
+        )
+        + "\n"
+    )
+    (tau_home / "providers.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "default_provider": "local",
+                "provider_preferences": {
+                    "local": {
+                        "default_model": "qwen",
+                        "headers": {},
+                        "max_retries": 2,
+                        "max_retry_delay_seconds": 1.0,
+                        "thinking_defaults": {"qwen": "xhigh"},
+                        "timeout_seconds": 60.0,
+                    }
+                },
+                "scoped_models": [{"provider": "local", "model": "qwen"}],
+            }
+        )
+    )
+    paths = TauPaths(home=tau_home)
+
+    settings = load_provider_settings(paths)
+    save_provider_settings(settings, paths)
+    reloaded = load_provider_settings(paths)
+
+    catalog_text = (tau_home / "catalog.toml").read_text()
+    assert "auto_compact_percent = 73" in catalog_text
+    provider = reloaded.get_provider("local")
+    assert isinstance(provider, OpenAICompatibleProviderConfig)
+    assert provider.model_metadata["qwen"].auto_compact_percent == 73
+
+
 @pytest.mark.parametrize("value", [0, 101, "80", 80.5, True])
 def test_provider_model_auto_compact_percent_rejects_invalid_values(value: object) -> None:
     """Prove the JSON parser validates auto_compact_percent to 1..100 integers.
