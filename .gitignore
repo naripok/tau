@@ -25,3 +25,4 @@ website/.hugo_build.lock
 .firecrawl/
 # Local scratch tooling
 scripts/analyze_session.py
+.worktrees/
