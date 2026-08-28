@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -71,6 +72,22 @@ class _GatewayOAuthProvider:
 
     def runtime_auth(self, credential: OAuthCredential) -> OAuthRuntimeAuth:
         return OAuthRuntimeAuth(api_key=credential.access, base_url=self.base_url)
+
+
+@pytest.fixture
+def register_gateway_oauth_provider() -> Iterator[Callable[[OAuthProvider], OAuthProvider]]:
+    """Register a gateway OAuth provider; unregister it and reset on teardown."""
+    registered: list[OAuthProvider] = []
+
+    def _register(provider: OAuthProvider) -> OAuthProvider:
+        register_oauth_provider(provider)
+        registered.append(provider)
+        return provider
+
+    yield _register
+    for provider in registered:
+        unregister_oauth_provider(provider.id)
+    reset_oauth_providers()
 
 
 _CROSS_PROCESS_REFRESH_SCRIPT = """
@@ -380,7 +397,7 @@ def test_provider_compat_can_suppress_only_the_tools_breakpoint(tmp_path) -> Non
 
 
 def test_anthropic_protocol_models_on_openai_compatible_providers_disable_cache_breakpoints(
-    tmp_path,
+    tmp_path, register_gateway_oauth_provider
 ) -> None:
     """A custom gateway speaking the Anthropic protocol gets no cache_control by default."""
     store = FileCredentialStore(tmp_path / "credentials.json")
@@ -388,23 +405,19 @@ def test_anthropic_protocol_models_on_openai_compatible_providers_disable_cache_
         _GATEWAY_NAME,
         OAuthCredential(access="gateway-access", refresh="gateway-token", expires=9999999999999),
     )
-    register_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
-    try:
-        provider = create_model_provider(
-            _gateway_config(),
-            credential_store=store,
-            model="claude-haiku-4.5",
-        )
-    finally:
-        unregister_oauth_provider(_GATEWAY_NAME)
-        reset_oauth_providers()
+    register_gateway_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
+    provider = create_model_provider(
+        _gateway_config(),
+        credential_store=store,
+        model="claude-haiku-4.5",
+    )
 
     assert isinstance(provider, AnthropicProvider)
     assert provider._config.cache_retention == "none"
 
 
 def test_model_metadata_compat_enables_cache_breakpoints_on_anthropic_protocol_gateways(
-    tmp_path,
+    tmp_path, register_gateway_oauth_provider
 ) -> None:
     """Per-model compat reaches the openai-compatible Anthropic-protocol branch."""
     store = FileCredentialStore(tmp_path / "credentials.json")
@@ -424,19 +437,15 @@ def test_model_metadata_compat_enables_cache_breakpoints_on_anthropic_protocol_g
         },
     )
 
-    register_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
-    try:
-        provider = create_model_provider(config, credential_store=store, model="claude-haiku-4.5")
-    finally:
-        unregister_oauth_provider(_GATEWAY_NAME)
-        reset_oauth_providers()
+    register_gateway_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
+    provider = create_model_provider(config, credential_store=store, model="claude-haiku-4.5")
 
     assert isinstance(provider, AnthropicProvider)
     assert provider._config.cache_retention == "long"
 
 
 def test_create_model_provider_uses_model_max_tokens_for_anthropic_protocol_model(
-    tmp_path,
+    tmp_path, register_gateway_oauth_provider
 ) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
@@ -448,22 +457,20 @@ def test_create_model_provider_uses_model_max_tokens_for_anthropic_protocol_mode
     metadata["claude-haiku-4.5"] = replace(metadata["claude-haiku-4.5"], max_tokens=64_000)
     provider_config = replace(config, model_metadata=metadata)
 
-    register_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
-    try:
-        provider = create_model_provider(
-            provider_config,
-            credential_store=store,
-            model="claude-haiku-4.5",
-        )
-    finally:
-        unregister_oauth_provider(_GATEWAY_NAME)
-        reset_oauth_providers()
+    register_gateway_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
+    provider = create_model_provider(
+        provider_config,
+        credential_store=store,
+        model="claude-haiku-4.5",
+    )
 
     assert isinstance(provider, AnthropicProvider)
     assert provider._config.max_tokens == 64_000
 
 
-def test_create_model_provider_uses_oauth_base_url_override(tmp_path) -> None:
+def test_create_model_provider_uses_oauth_base_url_override(
+    tmp_path, register_gateway_oauth_provider
+) -> None:
     """runtime_auth.base_url replaces the configured base_url for OAuth gateways."""
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
@@ -471,16 +478,12 @@ def test_create_model_provider_uses_oauth_base_url_override(tmp_path) -> None:
         OAuthCredential(access="gateway-access", refresh="gateway-token", expires=9999999999999),
     )
     oauth_provider = _GatewayOAuthProvider(base_url="https://proxy.gateway.test/v1")
-    register_oauth_provider(cast(OAuthProvider, oauth_provider))
-    try:
-        provider = create_model_provider(
-            _gateway_config(),
-            credential_store=store,
-            model="gpt-5.4",
-        )
-    finally:
-        unregister_oauth_provider(_GATEWAY_NAME)
-        reset_oauth_providers()
+    register_gateway_oauth_provider(cast(OAuthProvider, oauth_provider))
+    provider = create_model_provider(
+        _gateway_config(),
+        credential_store=store,
+        model="gpt-5.4",
+    )
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider._config.base_url == "https://proxy.gateway.test/v1"

@@ -113,8 +113,8 @@ record for contributor-facing work.
 
 ## Release process
 
-Tau is published to PyPI as `tau-ai`. Publishing is a production release action,
-not a side effect of every commit merged to `main`.
+This fork does not publish to PyPI. Releases are git-based: a tag and a
+GitHub Release mark a release, not every commit merged to `main`.
 
 To prepare a release, intentionally bump `[project].version` in `pyproject.toml`
 and merge that change through a pull request. See

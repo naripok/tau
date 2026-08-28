@@ -56,7 +56,7 @@ def test_file_credential_store_round_trips_extensible_oauth_metadata(tmp_path) -
         refresh="gateway-token",
         expires=123456,
         metadata={
-            "enterprise_domain": "ghe.example.com",
+            "tenant_id": "tenant-1",
             "available_model_ids": ["gpt-5.4", "claude-sonnet-4.6"],
         },
     )

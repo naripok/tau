@@ -23,8 +23,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://twotimespi.dev"
-Documentation = "https://twotimespi.dev"
+Homepage = "https://github.com/naripok/tau"
+Documentation = "https://github.com/naripok/tau"
 Repository = "https://github.com/huggingface/tau"
 Issues = "https://github.com/huggingface/tau/issues"
 

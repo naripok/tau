@@ -337,7 +337,8 @@ def test_system_prompt_flags_forward_to_resumed_tui(
     assert calls == [("session-1", "Resume base", "Resume append")]
 
 
-def test_version_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_version_command_prints_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The version command prints the configured version string."""
     monkeypatch.setattr(cli, "_current_version", lambda: "1.2.3")
 
     result = CliRunner().invoke(app, ["--version"])
@@ -346,7 +347,8 @@ def test_version_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPa
     assert result.stdout.strip() == "tau 1.2.3"
 
 
-def test_utility_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sessions_command_reports_no_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sessions command prints a no-sessions message for an empty session list."""
     monkeypatch.setattr(cli.SessionManager, "list_sessions", lambda self: [])
 
     result = CliRunner().invoke(app, ["sessions"])
@@ -356,10 +358,12 @@ def test_utility_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPa
 
 
 def _enable_startup_update_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Isolate home and remove the env gates so the startup update check runs.
+    """Isolate home and remove the update-check env gates from the environment.
 
-    The sandbox sets ``TAU_NO_UPDATE_CHECK=1``; without removing the gates the
-    startup notice tests pass vacuously because the check never runs.
+    The helper keeps the startup tests meaningful across the update-check
+    module deletion; nothing in the shipped code reads these variables
+    anymore, so the tests exercise startup behavior under a controlled
+    environment.
     """
     isolate_home(monkeypatch, tmp_path)
     monkeypatch.delenv("TAU_NO_UPDATE_CHECK", raising=False)
@@ -367,7 +371,12 @@ def _enable_startup_update_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 def _seed_update_check_cache() -> None:
-    """Pre-seed a fresh update-check cache so the notice fires without a PyPI fetch."""
+    """Pre-seed a fresh update-check cache file under the isolated home.
+
+    The helper keeps the startup tests meaningful across the update-check
+    module deletion; nothing in the shipped code reads this cache path
+    anymore, so the tests cover startup with a populated cache in place.
+    """
     cache_path = Path.home() / ".tau" / "cache" / "update-check.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
@@ -384,8 +393,8 @@ def _seed_update_check_cache() -> None:
 def _fail_on_http_get(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     """Patch httpx.get to record every call and raise; return the call log.
 
-    The update check swallows fetch exceptions, so the raise alone proves
-    nothing; the test asserts the recorded call log is empty.
+    The tests assert the recorded call log is empty, so startup stays free of
+    outbound HTTP requests even where CLI code catches exceptions.
     """
     calls: list[object] = []
 

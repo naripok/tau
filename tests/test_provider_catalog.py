@@ -59,7 +59,7 @@ def _write_user_catalog(tau_home: Path, body: str) -> TauPaths:
 
 
 def test_copilot_entry_leaves_picker() -> None:
-    """The builtin catalog no longer offers a GitHub Copilot provider."""
+    """The builtin catalog lists no GitHub Copilot provider."""
     assert builtin_provider_entry("github-copilot") is None
 
 

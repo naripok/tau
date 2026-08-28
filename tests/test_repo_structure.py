@@ -40,15 +40,50 @@ def _job_sections(workflow_text: str) -> list[str]:
     return sections
 
 
+_BLOCK_SCALAR_INDICATORS = ("", "|", "|-", "|+", ">", ">-", ">+")
+
+
+def _run_step_commands(job_text: str) -> list[str]:
+    """Return the command text of every `run:` step in one job section.
+
+    Inline commands contribute their text directly; block-scalar commands
+    contribute their body lines. Comments, job names, and step names do not
+    produce run-step command text, so they cannot satisfy the test-suite
+    check.
+    """
+    commands: list[str] = []
+    block_indent: int | None = None
+    for line in job_text.splitlines():
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+        if block_indent is not None:
+            if stripped and indent <= block_indent:
+                block_indent = None
+            else:
+                commands.append(stripped)
+                continue
+        if stripped.startswith("run:"):
+            command = stripped[len("run:") :].strip()
+            if command in _BLOCK_SCALAR_INDICATORS:
+                block_indent = indent
+            else:
+                commands.append(command)
+    return commands
+
+
 def test_exactly_one_workflow() -> None:
     """The `.github/workflows/` directory holds exactly one YAML workflow file."""
     assert len(_workflow_files()) == 1
 
 
 def test_workflow_runs_test_suite() -> None:
-    """The single workflow invokes the project test suite (`uv run pytest`)."""
+    """A `run:` step inside a job of the single workflow invokes the test suite."""
     (workflow,) = _workflow_files()
-    assert "uv run pytest" in workflow.read_text(encoding="utf-8")
+    workflow_text = workflow.read_text(encoding="utf-8")
+    commands = [
+        command for job in _job_sections(workflow_text) for command in _run_step_commands(job)
+    ]
+    assert any("uv run pytest" in command for command in commands)
 
 
 def test_no_dead_job() -> None:
