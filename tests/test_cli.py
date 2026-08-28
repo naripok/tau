@@ -1393,6 +1393,15 @@ def test_mode_flag_alone_triggers_print_mode(monkeypatch: pytest.MonkeyPatch) ->
     assert calls == [("hello", PrintOutputMode.json)]
 
 
+def test_rpc_mode_is_rejected() -> None:
+    """The removed RPC frontend is no longer a valid --mode choice."""
+    result = CliRunner().invoke(app, ["--mode", "rpc", "hello"])
+
+    assert result.exit_code != 0
+    output = _panel_text(result.output)
+    assert "Invalid value for '--mode': 'rpc' is not one of 'text', 'json', 'transcript'." in output
+
+
 def test_print_mode_requires_a_prompt() -> None:
     result = CliRunner().invoke(app, ["-p"])
 
