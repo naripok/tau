@@ -76,7 +76,7 @@ async def test_oauth_screen_shows_full_authorization_url() -> None:
 @pytest.mark.anyio
 async def test_oauth_device_code_screen_leaves_the_clipboard_alone() -> None:
     """The device flow's URI is short and clickable; the code is what matters."""
-    provider = builtin_provider_entry("github-copilot")
+    provider = builtin_provider_entry("anthropic")
     assert provider is not None
 
     async def fake_login(callbacks):
@@ -127,7 +127,7 @@ async def test_oauth_screen_fits_a_short_terminal() -> None:
 
 @pytest.mark.anyio
 async def test_oauth_screen_accepts_blank_provider_prompt() -> None:
-    provider = builtin_provider_entry("github-copilot")
+    provider = builtin_provider_entry("anthropic")
     assert provider is not None
     screen = OAuthLoginScreen(provider, theme=TAU_DARK_THEME)
     screen.compose()

@@ -43,7 +43,6 @@ from tau_ai._provider_events import (
 from tau_ai.content import (
     NON_VISION_TOOL_IMAGE_PLACEHOLDER,
     NON_VISION_USER_IMAGE_PLACEHOLDER,
-    messages_have_images,
     text_and_images,
 )
 from tau_ai.env import OpenAICompatibleConfig
@@ -187,7 +186,6 @@ class OpenAICompatibleProvider:
             parser_factory=_ChatStreamParser,
             session_id=affinity_id,
             session_affinity_format=self._session_affinity_format(responses=False),
-            has_images=(self._config.supports_images and messages_have_images(messages)),
             signal=signal,
         )
 
@@ -223,7 +221,6 @@ class OpenAICompatibleProvider:
             parser_factory=_ResponsesStreamParser,
             session_id=affinity_id,
             session_affinity_format=self._session_affinity_format(responses=True),
-            has_images=(self._config.supports_images and messages_have_images(messages)),
             signal=signal,
         )
 
@@ -236,7 +233,6 @@ class OpenAICompatibleProvider:
         parser_factory: Callable[[], _StreamParser],
         session_id: str | None = None,
         session_affinity_format: str | None = None,
-        has_images: bool = False,
         signal: CancellationToken | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Run the shared streaming POST + retry envelope for a given endpoint.
@@ -252,8 +248,6 @@ class OpenAICompatibleProvider:
             api_key = self._config.api_key
             request_url = url
             headers = dict(self._config.headers or {})
-            if self._config.provider_name == "github-copilot" and has_images:
-                headers["Copilot-Vision-Request"] = "true"
             if self._config.credential_resolver is not None:
                 auth = await self._config.credential_resolver()
                 api_key = auth.api_key

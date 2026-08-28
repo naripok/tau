@@ -7266,7 +7266,6 @@ async def test_tui_login_subscription_opens_oauth_provider_picker() -> None:
         assert labels == [
             "OpenAI Codex subscription — openai-codex",
             "Anthropic — anthropic",
-            "GitHub Copilot — github-copilot",
         ]
         assert "gpt-5.5" not in "\n".join(labels)
 

@@ -58,6 +58,11 @@ def _write_user_catalog(tau_home: Path, body: str) -> TauPaths:
     return paths
 
 
+def test_copilot_entry_leaves_picker() -> None:
+    """The builtin catalog no longer offers a GitHub Copilot provider."""
+    assert builtin_provider_entry("github-copilot") is None
+
+
 def test_builtin_catalog_matches_expected_providers() -> None:
     names = [entry.name for entry in BUILTIN_PROVIDER_CATALOG]
     assert names == [
@@ -87,7 +92,6 @@ def test_builtin_catalog_matches_expected_providers() -> None:
         "xiaomi-token-plan-sgp",
         "opencode-go",
         "opencode",
-        "github-copilot",
     ]
 
 
@@ -219,38 +223,6 @@ def test_builtin_catalog_separates_openai_api_and_codex_context_limits() -> None
                 "qwen3.6-plus",
             },
         ),
-        (
-            "github-copilot",
-            {
-                "claude-fable-5",
-                "claude-haiku-4.5",
-                "claude-opus-4.5",
-                "claude-opus-4.6",
-                "claude-opus-4.7",
-                "claude-opus-4.8",
-                "claude-sonnet-4",
-                "claude-sonnet-4.5",
-                "claude-sonnet-4.6",
-                "claude-sonnet-5",
-                "gemini-2.5-pro",
-                "gemini-3-flash-preview",
-                "gemini-3.1-pro-preview",
-                "gemini-3.5-flash",
-                "gpt-4.1",
-                "gpt-5-mini",
-                "gpt-5.2",
-                "gpt-5.2-codex",
-                "gpt-5.3-codex",
-                "gpt-5.4",
-                "gpt-5.4-mini",
-                "gpt-5.4-nano",
-                "gpt-5.5",
-                "gpt-5.6-luna",
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "kimi-k2.7-code",
-            },
-        ),
     ],
 )
 def test_sparse_provider_catalogs_declare_model_input_modalities(
@@ -267,38 +239,14 @@ def test_sparse_provider_catalogs_declare_model_input_modalities(
 
 def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
     codex = builtin_provider_entry("openai-codex")
-    copilot = builtin_provider_entry("github-copilot")
     opencode_go = builtin_provider_entry("opencode-go")
     opencode = builtin_provider_entry("opencode")
 
     assert codex is not None and codex.auth_methods == ("oauth",)
-    assert copilot is not None and copilot.auth_methods == ("oauth",)
     assert opencode_go is not None and opencode_go.auth_methods == ("api_key",)
     assert opencode is not None and opencode.auth_methods == ("api_key",)
     assert opencode_go.api_key_env == "OPENCODE_API_KEY"
     assert opencode.api_key_env == "OPENCODE_API_KEY"
-
-
-def test_builtin_catalog_copilot_claude_max_tokens() -> None:
-    entry = builtin_provider_entry("github-copilot")
-    assert entry is not None
-
-    expected = {
-        "claude-haiku-4.5": 64_000,
-        "claude-opus-4.5": 32_000,
-        "claude-opus-4.6": 32_000,
-        "claude-opus-4.7": 32_000,
-        "claude-opus-4.8": 64_000,
-        "claude-sonnet-4": 16_000,
-        "claude-sonnet-4.5": 32_000,
-        "claude-sonnet-4.6": 32_000,
-        "claude-sonnet-5": 128_000,
-    }
-
-    for model, max_tokens in expected.items():
-        metadata = entry.model_metadata[model]
-        assert metadata.api == "anthropic-messages"
-        assert metadata.max_tokens == max_tokens
 
 
 def test_builtin_catalog_golden_nvidia_entry() -> None:

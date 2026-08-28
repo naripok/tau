@@ -52,8 +52,8 @@ def test_file_credential_store_round_trips_extensible_oauth_metadata(tmp_path) -
     path = tmp_path / "credentials.json"
     store = FileCredentialStore(path)
     credential = OAuthCredential(
-        access="copilot-access",
-        refresh="github-token",
+        access="gateway-access",
+        refresh="gateway-token",
         expires=123456,
         metadata={
             "enterprise_domain": "ghe.example.com",
@@ -61,9 +61,9 @@ def test_file_credential_store_round_trips_extensible_oauth_metadata(tmp_path) -
         },
     )
 
-    store.set_oauth("github-copilot", credential)
+    store.set_oauth("acme-gateway", credential)
 
-    assert store.get_oauth("github-copilot") == credential
+    assert store.get_oauth("acme-gateway") == credential
     assert '"account_id"' not in path.read_text(encoding="utf-8")
     assert not list(tmp_path.glob(".credentials.json.*"))
 

@@ -3395,7 +3395,8 @@ async def test_openai_codex_provider_leaves_reasoning_none_when_unreported() -> 
 
 
 @pytest.mark.anyio
-async def test_github_copilot_sends_vision_header_for_tool_result_images() -> None:
+async def test_copilot_request_headers_are_gone_openai_compatible() -> None:
+    """Provider identity is configuration, so it must not change the headers."""
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -3431,11 +3432,12 @@ async def test_github_copilot_sends_vision_header_for_tool_result_images() -> No
             )
         )
 
-    assert requests[0].headers["Copilot-Vision-Request"] == "true"
+    assert "copilot-vision-request" not in requests[0].headers
 
 
 @pytest.mark.anyio
-async def test_github_copilot_anthropic_sends_vision_header() -> None:
+async def test_copilot_request_headers_are_gone_anthropic() -> None:
+    """Provider identity is configuration, so it must not change the headers."""
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -3470,4 +3472,4 @@ async def test_github_copilot_anthropic_sends_vision_header() -> None:
             )
         )
 
-    assert requests[0].headers["Copilot-Vision-Request"] == "true"
+    assert "copilot-vision-request" not in requests[0].headers

@@ -32,6 +32,47 @@ from tau_coding.provider_runtime import (
     create_model_provider,
 )
 
+_GATEWAY_NAME = "claude-gateway"
+
+
+def _gateway_config() -> OpenAICompatibleProviderConfig:
+    """A custom openai-compatible gateway with one Anthropic-protocol model."""
+    return OpenAICompatibleProviderConfig(
+        name=_GATEWAY_NAME,
+        base_url="https://gateway.test/v1",
+        api_key_env="CLAUDE_GATEWAY_API_KEY",
+        credential_name=_GATEWAY_NAME,
+        models=("claude-haiku-4.5", "gpt-5.4"),
+        default_model="claude-haiku-4.5",
+        model_metadata={
+            "claude-haiku-4.5": ProviderModelMetadata(
+                api="anthropic-messages",
+                input=("text", "image"),
+            ),
+        },
+    )
+
+
+class _GatewayOAuthProvider:
+    """Minimal registered OAuth provider backing the gateway fixtures."""
+
+    id = _GATEWAY_NAME
+    name = _GATEWAY_NAME
+    flow_kinds = ("device_code",)
+
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = base_url
+
+    async def login(self, _callbacks: OAuthLoginCallbacks) -> OAuthCredential:
+        raise AssertionError("not used")
+
+    async def refresh(self, credential: OAuthCredential) -> OAuthCredential:
+        raise AssertionError("not used")
+
+    def runtime_auth(self, credential: OAuthCredential) -> OAuthRuntimeAuth:
+        return OAuthRuntimeAuth(api_key=credential.access, base_url=self.base_url)
+
+
 _CROSS_PROCESS_REFRESH_SCRIPT = """
 import asyncio
 import sys
@@ -338,40 +379,40 @@ def test_provider_compat_can_suppress_only_the_tools_breakpoint(tmp_path) -> Non
     assert provider._config.cache_control_on_tools is False
 
 
-def test_copilot_anthropic_protocol_models_disable_cache_breakpoints(tmp_path) -> None:
-    """Copilot proxies the Anthropic protocol, so it gets no cache_control either."""
+def test_anthropic_protocol_models_on_openai_compatible_providers_disable_cache_breakpoints(
+    tmp_path,
+) -> None:
+    """A custom gateway speaking the Anthropic protocol gets no cache_control by default."""
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
-        "github-copilot",
-        OAuthCredential(
-            access="tid=1;proxy-ep=proxy.business.githubcopilot.com",
-            refresh="github-token",
-            expires=9999999999999,
-        ),
+        _GATEWAY_NAME,
+        OAuthCredential(access="gateway-access", refresh="gateway-token", expires=9999999999999),
     )
-
-    provider = create_model_provider(
-        provider_config_from_catalog_entry("github-copilot"),
-        credential_store=store,
-        model="claude-haiku-4.5",
-    )
+    register_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
+    try:
+        provider = create_model_provider(
+            _gateway_config(),
+            credential_store=store,
+            model="claude-haiku-4.5",
+        )
+    finally:
+        unregister_oauth_provider(_GATEWAY_NAME)
+        reset_oauth_providers()
 
     assert isinstance(provider, AnthropicProvider)
     assert provider._config.cache_retention == "none"
 
 
-def test_copilot_model_metadata_compat_can_enable_cache_breakpoints(tmp_path) -> None:
+def test_model_metadata_compat_enables_cache_breakpoints_on_anthropic_protocol_gateways(
+    tmp_path,
+) -> None:
     """Per-model compat reaches the openai-compatible Anthropic-protocol branch."""
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
-        "github-copilot",
-        OAuthCredential(
-            access="tid=1;proxy-ep=proxy.business.githubcopilot.com",
-            refresh="github-token",
-            expires=9999999999999,
-        ),
+        _GATEWAY_NAME,
+        OAuthCredential(access="gateway-access", refresh="gateway-token", expires=9999999999999),
     )
-    config = provider_config_from_catalog_entry("github-copilot")
+    config = _gateway_config()
     metadata = config.model_metadata["claude-haiku-4.5"]
     config = replace(
         config,
@@ -383,7 +424,12 @@ def test_copilot_model_metadata_compat_can_enable_cache_breakpoints(tmp_path) ->
         },
     )
 
-    provider = create_model_provider(config, credential_store=store, model="claude-haiku-4.5")
+    register_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
+    try:
+        provider = create_model_provider(config, credential_store=store, model="claude-haiku-4.5")
+    finally:
+        unregister_oauth_provider(_GATEWAY_NAME)
+        reset_oauth_providers()
 
     assert isinstance(provider, AnthropicProvider)
     assert provider._config.cache_retention == "long"
@@ -394,46 +440,50 @@ def test_create_model_provider_uses_model_max_tokens_for_anthropic_protocol_mode
 ) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
-        "github-copilot",
-        OAuthCredential(
-            access="tid=1",
-            refresh="github-token",
-            expires=9999999999999,
-        ),
+        _GATEWAY_NAME,
+        OAuthCredential(access="gateway-access", refresh="gateway-token", expires=9999999999999),
     )
-    catalog_config = provider_config_from_catalog_entry("github-copilot")
-    assert isinstance(catalog_config, OpenAICompatibleProviderConfig)
-    metadata = dict(catalog_config.model_metadata)
+    config = _gateway_config()
+    metadata = dict(config.model_metadata)
     metadata["claude-haiku-4.5"] = replace(metadata["claude-haiku-4.5"], max_tokens=64_000)
-    provider_config = replace(catalog_config, model_metadata=metadata)
+    provider_config = replace(config, model_metadata=metadata)
 
-    provider = create_model_provider(
-        provider_config,
-        credential_store=store,
-        model="claude-haiku-4.5",
-    )
+    register_oauth_provider(cast(OAuthProvider, _GatewayOAuthProvider()))
+    try:
+        provider = create_model_provider(
+            provider_config,
+            credential_store=store,
+            model="claude-haiku-4.5",
+        )
+    finally:
+        unregister_oauth_provider(_GATEWAY_NAME)
+        reset_oauth_providers()
 
     assert isinstance(provider, AnthropicProvider)
     assert provider._config.max_tokens == 64_000
 
 
-def test_create_model_provider_uses_copilot_token_base_url(tmp_path) -> None:
+def test_create_model_provider_uses_oauth_base_url_override(tmp_path) -> None:
+    """runtime_auth.base_url replaces the configured base_url for OAuth gateways."""
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
-        "github-copilot",
-        OAuthCredential(
-            access="tid=1;proxy-ep=proxy.business.githubcopilot.com",
-            refresh="github-token",
-            expires=9999999999999,
-        ),
+        _GATEWAY_NAME,
+        OAuthCredential(access="gateway-access", refresh="gateway-token", expires=9999999999999),
     )
-    provider = create_model_provider(
-        provider_config_from_catalog_entry("github-copilot"),
-        credential_store=store,
-    )
+    oauth_provider = _GatewayOAuthProvider(base_url="https://proxy.gateway.test/v1")
+    register_oauth_provider(cast(OAuthProvider, oauth_provider))
+    try:
+        provider = create_model_provider(
+            _gateway_config(),
+            credential_store=store,
+            model="gpt-5.4",
+        )
+    finally:
+        unregister_oauth_provider(_GATEWAY_NAME)
+        reset_oauth_providers()
 
     assert isinstance(provider, OpenAICompatibleProvider)
-    assert provider._config.base_url == "https://api.business.githubcopilot.com"
+    assert provider._config.base_url == "https://proxy.gateway.test/v1"
     assert provider._config.credential_resolver is not None
 
 
@@ -741,13 +791,13 @@ async def test_runtime_oauth_resolver_holds_the_file_lock_during_refresh(
     """The file lock wraps the OAuth runtime re-read, refresh, and write."""
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
-        "github-copilot",
-        OAuthCredential(access="old", refresh="github-token", expires=1),
+        "anthropic",
+        OAuthCredential(access="old", refresh="refresh-token", expires=1),
     )
 
     class FakeOAuthProvider:
-        id = "github-copilot"
-        name = "Fake GitHub Copilot"
+        id = "anthropic"
+        name = "Fake Anthropic"
         flow_kinds = ("device_code",)
 
         async def login(self, _callbacks: OAuthLoginCallbacks) -> OAuthCredential:
@@ -766,12 +816,12 @@ async def test_runtime_oauth_resolver_holds_the_file_lock_during_refresh(
         def runtime_auth(self, credential: OAuthCredential) -> OAuthRuntimeAuth:
             return OAuthRuntimeAuth(api_key=credential.access)
 
-    provider = provider_config_from_catalog_entry("github-copilot")
+    provider = provider_config_from_catalog_entry("anthropic")
     register_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
     try:
         auth = await OAuthRuntimeCredentialResolver(provider, credential_store=store)()
     finally:
-        unregister_oauth_provider("github-copilot")
+        unregister_oauth_provider("anthropic")
         reset_oauth_providers()
 
     assert auth.api_key == "new-access"
@@ -807,15 +857,15 @@ async def test_oauth_runtime_refresh_fails_when_the_file_lock_is_unavailable(
     """
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(
-        "github-copilot",
-        OAuthCredential(access="old", refresh="github-token", expires=1),
+        "anthropic",
+        OAuthCredential(access="old", refresh="refresh-token", expires=1),
     )
     # A directory at the lock path makes open() raise OSError.
     Path(f"{store.path}.lock").mkdir()
 
     class FakeOAuthProvider:
-        id = "github-copilot"
-        name = "Fake GitHub Copilot"
+        id = "anthropic"
+        name = "Fake Anthropic"
         flow_kinds = ("device_code",)
 
         async def login(self, _callbacks: OAuthLoginCallbacks) -> OAuthCredential:
@@ -827,12 +877,12 @@ async def test_oauth_runtime_refresh_fails_when_the_file_lock_is_unavailable(
         def runtime_auth(self, credential: OAuthCredential) -> OAuthRuntimeAuth:
             raise AssertionError("not used")
 
-    provider = provider_config_from_catalog_entry("github-copilot")
+    provider = provider_config_from_catalog_entry("anthropic")
     register_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
     resolver = OAuthRuntimeCredentialResolver(provider, credential_store=store)
     try:
         with pytest.raises(OSError):
             await resolver()
     finally:
-        unregister_oauth_provider("github-copilot")
+        unregister_oauth_provider("anthropic")
         reset_oauth_providers()

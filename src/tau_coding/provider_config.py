@@ -1575,10 +1575,10 @@ def _detected_compat(provider: ProviderConfig, model: str) -> dict[str, Any]:
         "supportsPromptCacheKey": is_openai_api,
         "sendSessionAffinityHeaders": is_openai_api and is_openai_responses,
         "sessionAffinityFormat": "openrouter" if is_openrouter else "openai",
-        # Only first-party Anthropic is known to accept cache_control. Several
-        # catalog providers speak the Anthropic protocol through a gateway, and one
-        # proxies to non-Anthropic models, so they default to no breakpoints. This
-        # is a detected default, overridable per provider or per model.
+        # Only first-party Anthropic is known to accept cache_control. A custom
+        # gateway can speak the Anthropic protocol for non-Anthropic models, so
+        # it defaults to no breakpoints. This is a detected default, overridable
+        # per provider or per model.
         "supportsCacheControl": is_anthropic_api,
         "supportsCacheControlOnTools": True,
     }
