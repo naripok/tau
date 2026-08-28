@@ -8532,46 +8532,6 @@ async def test_tui_resume_refreshes_context_after_session_swap() -> None:
     ]
 
 
-@pytest.mark.anyio
-async def test_tui_app_shows_startup_update_notice_first_in_bright_yellow() -> None:
-    session = FakeSession(messages=[UserMessage(content="Earlier prompt")])
-    app = TauTuiApp(
-        session,
-        startup_update_notice="Tau 0.2.0 is available",
-        startup_alerts=("Conflicting skills/prompts detected",),
-        startup_notices=("Tau updated to 0.2.0",),
-    )
-    notifications: list[tuple[str, str | None]] = []
-
-    def fake_notify(message: str, **kwargs: object) -> None:
-        severity = kwargs.get("severity")
-        notifications.append((message, severity if isinstance(severity, str) else None))
-
-    app._notify = fake_notify  # type: ignore[method-assign]
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        transcript = app.query_one("#transcript", TranscriptView)
-        assert [line.text for line in transcript.lines] == [
-            "Tau 0.2.0 is available",
-            "Conflicting skills/prompts detected",
-            "Tau updated to 0.2.0",
-            "Earlier prompt",
-        ]
-        widgets = list(transcript.query(TranscriptMessageWidget))
-        update_widget = widgets[0]
-        assert update_widget.item.highlight == "update"
-        assert update_widget._role_style.border == "#ffff00"
-        assert update_widget._role_style.body == "bold #ffff00"
-        alert_widget = widgets[1]
-        assert alert_widget.item.highlight == "alert"
-        assert alert_widget._role_style.border == TAU_DARK_THEME.error
-        assert alert_widget._role_style.body == f"bold {TAU_DARK_THEME.error}"
-
-    assert notifications == []
-    assert [message.text for message in session.messages] == ["Earlier prompt"]
-
-
 def test_resource_conflict_alert_includes_skill_and_prompt_locations(tmp_path: Path) -> None:
     diagnostics = (
         ResourceDiagnostic(

@@ -341,7 +341,7 @@ async def test_rpc_reports_bad_records_and_continues(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("command", ["providers", "sessions", "setup", "export", "update"])
+@pytest.mark.parametrize("command", ["providers", "sessions", "setup", "export"])
 def test_rpc_mode_never_dispatches_utility_commands(
     monkeypatch: pytest.MonkeyPatch, command: str
 ) -> None:
@@ -352,7 +352,6 @@ def test_rpc_mode_never_dispatches_utility_commands(
     )
     monkeypatch.setattr(cli_module, "setup_command", lambda **kwargs: called.append("setup"))
     monkeypatch.setattr(cli_module, "_run_export_cli", lambda args: called.append("export"))
-    monkeypatch.setattr(cli_module, "update_command", lambda: called.append("update"))
 
     result = CliRunner().invoke(cli_module.app, ["--mode", "rpc", command])
 

@@ -58,12 +58,6 @@ from tau_coding.session_export import (
 from tau_coding.session_manager import CodingSessionRecord, SessionManager, validate_session_id
 from tau_coding.shell_config import load_shell_settings
 from tau_coding.tui import run_tui_app
-from tau_coding.update_check import (
-    UpdateNotice,
-    startup_release_notes_notice,
-    startup_update_notice,
-)
-from tau_coding.updater import update_tau
 from tau_coding.version import current_version as _current_version
 
 
@@ -96,8 +90,6 @@ app = typer.Typer(
     epilog="""Commands:
 
   tau install SOURCE [--force] - Install a trusted local or Git extension.
-
-  tau update - Upgrade Tau.
 
   tau sessions - List indexed sessions.
 
@@ -413,11 +405,14 @@ def main(
     if rpc_requested and export:
         raise typer.BadParameter("--export cannot be combined with --mode rpc")
 
-    if not rpc_requested and not print_requested and not export and command == "update":
-        if len(positional_args) != 1:
-            raise typer.BadParameter("Usage: tau update")
-        update_command()
-        raise typer.Exit()
+    if (
+        not rpc_requested
+        and not print_requested
+        and not export
+        and command == "update"
+        and len(positional_args) == 1
+    ):
+        raise typer.BadParameter("Unknown command: update")
 
     if not rpc_requested and not print_requested and not export and command == "install":
         install_command(positional_args[1:])
@@ -500,7 +495,6 @@ def main(
         raise typer.Exit()
 
     if not print_requested:
-        notice = _startup_update_notice()
         try:
             tui_args = (
                 model,
@@ -510,7 +504,6 @@ def main(
                 provider,
                 auto_compact_threshold,
                 initial_prompt,
-                notice,
                 extension_paths,
                 not no_extensions,
                 project_extensions,
@@ -534,10 +527,6 @@ def main(
             'Usage: tau --print "<prompt>" (or --mode text|json|transcript "<prompt>"); '
             "a prompt can also be piped in via stdin"
         )
-
-    notice = _startup_update_notice()
-    if notice is not None and effective_output is PrintOutputMode.text:
-        typer.echo(notice.message, err=True)
 
     try:
         print_args = (
@@ -576,7 +565,6 @@ async def run_openai_tui(
     provider_name: str | None = None,
     auto_compact_token_threshold: int | None = None,
     initial_prompt: str | None = None,
-    update_notice: UpdateNotice | None = None,
     extension_paths: tuple[Path, ...] = (),
     extensions_enabled: bool = True,
     project_extensions_enabled: bool = False,
@@ -585,8 +573,6 @@ async def run_openai_tui(
     trust_override: TrustOverride | None = None,
 ) -> str | None:
     """Run the Textual TUI and return its resumable session id, if any."""
-    release_notes_notice = startup_release_notes_notice(_current_version())
-    startup_notices = (release_notes_notice.message,) if release_notes_notice is not None else ()
     return await run_tui_app(
         model=model,
         cwd=cwd,
@@ -595,8 +581,6 @@ async def run_openai_tui(
         provider_name=provider_name,
         auto_compact_token_threshold=auto_compact_token_threshold,
         initial_prompt=initial_prompt,
-        startup_update_notice=update_notice.message if update_notice is not None else None,
-        startup_notices=startup_notices,
         extension_paths=extension_paths,
         extensions_enabled=extensions_enabled,
         project_extensions_enabled=project_extensions_enabled,
@@ -604,28 +588,6 @@ async def run_openai_tui(
         append_system_prompt=append_system_prompt,
         trust_override=trust_override,
     )
-
-
-def _startup_update_notice() -> UpdateNotice | None:
-    return startup_update_notice(_current_version())
-
-
-def update_command() -> None:
-    """Upgrade Tau using the installer that manages the current environment."""
-    result = update_tau()
-    if not result.succeeded:
-        typer.echo("Could not safely update Tau:", err=True)
-        for failure in result.failures:
-            typer.echo(f"- {failure}", err=True)
-        raise typer.Exit(1)
-    if result.stdout:
-        typer.echo(result.stdout)
-    if result.stderr:
-        typer.echo(result.stderr, err=True)
-    if result.deferred:
-        typer.echo(f"Tau update handed off with: {' '.join(result.command or ())}")
-    else:
-        typer.echo(f"Tau update completed with: {' '.join(result.command or ())}")
 
 
 def render_session_list(records: list[CodingSessionRecord]) -> None:

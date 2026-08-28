@@ -262,9 +262,7 @@ class OpenAICodexCredentialResolver:
     ) -> OAuthCredential:
         if not oauth_credential_is_expired(credential):
             return credential
-        async with _refresh_lock(credential_name), _refresh_file_lock(
-            self._credential_store.path
-        ):
+        async with _refresh_lock(credential_name), _refresh_file_lock(self._credential_store.path):
             with _file_refresh_lock(self._credential_store.path):
                 stored = self._credential_store.get_oauth(credential_name) or credential
                 if not oauth_credential_is_expired(stored):
@@ -423,9 +421,7 @@ class OAuthRuntimeCredentialResolver:
         if credential_name is None:
             raise RuntimeError(f"Provider {self._provider.name} has no credential name")
         oauth_provider = _required_oauth_provider(self._provider.name)
-        async with _refresh_lock(credential_name), _refresh_file_lock(
-            self._credential_store.path
-        ):
+        async with _refresh_lock(credential_name), _refresh_file_lock(self._credential_store.path):
             with _file_refresh_lock(self._credential_store.path):
                 # Read inside the locks: a task or process that waited here
                 # while another refreshed sees the rotated credential and

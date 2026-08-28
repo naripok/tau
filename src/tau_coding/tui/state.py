@@ -78,7 +78,7 @@ class ChatItem:
     plain_text: bool = False
     custom_type: str | None = None
     details: dict[str, JSONValue] | None = None
-    highlight: Literal["alert", "update"] | None = None
+    highlight: Literal["alert"] | None = None
 
 
 @dataclass(slots=True)
@@ -128,7 +128,7 @@ class TuiState:
         plain_text: bool = False,
         custom_type: str | None = None,
         details: dict[str, JSONValue] | None = None,
-        highlight: Literal["alert", "update"] | None = None,
+        highlight: Literal["alert"] | None = None,
     ) -> None:
         """Append a transcript item."""
         item = ChatItem(

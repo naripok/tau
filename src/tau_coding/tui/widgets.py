@@ -1555,7 +1555,7 @@ def _use_plain_transcript_body(item: ChatItem) -> bool:
     """Return whether a transcript item can use fast selectable plain text."""
     return (
         item.plain_text
-        or item.highlight in {"alert", "update"}
+        or item.highlight == "alert"
         or item.role in {"user", "tool", "skill", "error"}
     )
 
@@ -1881,8 +1881,6 @@ def render_chat_item(
 def _chat_item_role_style(item: ChatItem, theme: TuiTheme) -> TuiRoleStyle:
     if item.highlight == "alert":
         return TuiRoleStyle(border=theme.error, body=f"bold {theme.error}")
-    if item.highlight == "update":
-        return TuiRoleStyle(border="#ffff00", body="bold #ffff00")
     if item.role == "tool" and item.tool_result_text:
         if item.tool_result_text.startswith("✓"):
             return TuiRoleStyle(border=theme.success, body=theme.role_styles["tool"].body)
