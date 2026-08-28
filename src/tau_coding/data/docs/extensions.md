@@ -4,9 +4,9 @@ Tau extensions are Python modules that can register custom tools and slash comma
 
 ## Start here
 
-For complete API documentation, read the repository's published guide when working in a Tau checkout:
+For the extension API and design background in a Tau checkout, read:
 
-- `website/content/guides/extensions.md`
+- `src/tau_coding/extensions/api.py`
 - `dev-notes/architecture/phase-21-extensions.md`
 
 Installed examples are under `examples/extensions/` next to these docs. Read the relevant example completely before implementing an extension.
@@ -40,11 +40,11 @@ a process/filesystem/network/tool/model sandbox.
 ## Development checklist
 
 1. Read this document and the closest installed example under `examples/extensions/` completely before implementing.
-2. In a Tau checkout, also read `website/content/guides/extensions.md` and the relevant public extension API implementation.
+2. In a Tau checkout, also read `src/tau_coding/extensions/api.py`.
 3. Confirm the requested capability exists in the extension API before inventing a workaround.
 4. Define `setup(tau)` and use documented registration APIs; do not reach into private session or Textual internals.
 5. Keep extension behavior out of `tau_agent`; extensions belong to `tau_coding`. Use `tau_agent` types for portable messages and tools, and keep Textual behind Tau's UI adapter APIs.
 6. Put user extensions in `~/.tau/extensions/`. Project extensions require explicit trust through `--project-extensions`; never enable one from an untrusted repository. Use `tau -e PATH` for isolated testing.
 7. Test through the real extension runtime so discovery, imports, and `setup` registration are exercised. For Tau core changes, add deterministic tests with fake providers/tools and cover reload and lifecycle behavior when applicable.
 8. Run focused tests followed by the repository's full pytest, Ruff, formatting, and mypy checks.
-9. Update `website/content/guides/extensions.md` and add a development note for user-facing architectural changes.
+9. Add a development note for user-facing architectural changes.

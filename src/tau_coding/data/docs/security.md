@@ -18,5 +18,3 @@ Project trust is only an input-loading guard. It is not a filesystem, process,
 shell, network, tool, credential, provider, model, package-install,
 prompt-injection, or exfiltration sandbox. Use OS/container/VM isolation and
 restricted credentials/network when isolation is required.
-
-Published details: `website/content/guides/project-trust.md`.

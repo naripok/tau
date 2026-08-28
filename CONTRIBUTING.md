@@ -66,14 +66,6 @@ uv run ruff format --check .
 uv run mypy
 ```
 
-For the documentation site (a [Hugo](https://gohugo.io/) project):
-
-```bash
-cd website
-hugo server -D
-hugo --minify
-```
-
 ## Where changes belong
 
 Use the layer boundaries to decide where code should live:
@@ -116,11 +108,8 @@ For substantial architectural or phase-oriented work, add beginner-friendly note
 - how it maps to Tau's architecture
 - how to test or use it
 
-For user-facing behavior, update the published docs under:
-
-```text
-website/content/
-```
+This fork has no published docs site, so `dev-notes/` is the documentation
+record for contributor-facing work.
 
 ## Release process
 
@@ -128,10 +117,8 @@ Tau is published to PyPI as `tau-ai`. Publishing is a production release action,
 not a side effect of every commit merged to `main`.
 
 To prepare a release, intentionally bump `[project].version` in `pyproject.toml`
-and merge that change through a pull request. The PyPI workflow publishes only
-when it detects that version change, or when a maintainer uses an explicit
-release trigger such as a published GitHub Release or manual workflow dispatch.
-See [dev-notes/release-process.md](dev-notes/release-process.md) for the full
+and merge that change through a pull request. See
+[dev-notes/release-process.md](dev-notes/release-process.md) for the full
 process.
 
 ## Pull request guidelines

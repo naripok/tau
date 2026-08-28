@@ -4,7 +4,7 @@ Tau separates provider/model streaming (`tau_ai`), the portable harness (`tau_ag
 
 ## User configuration
 
-Use `/login` and `/model` for built-in providers. The custom-provider flow supports OpenAI-compatible endpoints. Durable provider settings live under Tau's home directory; consult the published `website/content/guides/providers-and-models.md` in a Tau checkout for the current schema and authentication behavior.
+Use `/login` and `/model` for built-in providers. The custom-provider flow supports OpenAI-compatible endpoints. Durable provider settings live under Tau's home directory. In a Tau checkout, read `src/tau_coding/provider_config.py` for the saved-settings schema and authentication behavior.
 
 ## Changing the built-in catalog
 
@@ -40,6 +40,6 @@ When withdrawing a model from one built-in provider, add it to that provider's
 stale saved catalog definitions from restoring an unroutable provider/model
 combination while leaving the same model ID available on other providers.
 
-Test both the exposed levels and the actual API value produced by provider configuration. Update `website/content/guides/providers-and-models.md` and add a beginner-friendly development note for substantial user-facing changes. Inspect `src/tau_coding/data/release-notes/releases.json`, but update it only when appropriate.
+Test both the exposed levels and the actual API value produced by provider configuration. Add a beginner-friendly development note for substantial user-facing changes.
 
-Run focused provider tests followed by the repository's full pytest, Ruff, formatting, and mypy checks. Build the website when published provider documentation changes.
+Run focused provider tests followed by the repository's full pytest, Ruff, formatting, and mypy checks.

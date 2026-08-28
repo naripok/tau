@@ -46,25 +46,3 @@ jobs:
 
       - name: Run mypy
         run: uv run mypy
-
-  docs:
-    name: Documentation build
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: website
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Setup Hugo
-        uses: peaceiris/actions-hugo@v3
-        with:
-          hugo-version: "0.152.2"
-          extended: true
-
-      - name: Build documentation
-        run: hugo --minify
-
-      - name: Build search index
-        run: npx --yes pagefind@latest --site public

@@ -29,4 +29,4 @@ Templates load from user and project `.tau/prompts/` and `.agents/prompts/` dire
 
 Use a skill for reference know-how and a template for a frequently repeated prompt. Run `/reload` after changing resources in an active TUI session.
 
-When modifying Tau's resource system, read `src/tau_coding/skills.py`, `src/tau_coding/resources.py`, and `website/content/guides/skills-and-prompts.md`, then test discovery, precedence, diagnostics, prompt formatting, and reload behavior.
+When modifying Tau's resource system, read `src/tau_coding/skills.py` and `src/tau_coding/resources.py`, then test discovery, precedence, diagnostics, prompt formatting, and reload behavior.

@@ -16,4 +16,4 @@ Packages:
 
 Keep `tau_agent` independent of Typer, Rich, Textual, application resource locations, and provider-specific assumptions. Prefer typed data models, explicit async boundaries, deterministic fakes, and small abstractions.
 
-In a Tau checkout, read `AGENTS.md`, `website/content/internals/architecture.md`, and relevant `dev-notes/architecture/` documents before broad architectural changes.
+In a Tau checkout, read `AGENTS.md` and relevant `dev-notes/architecture/` documents before broad architectural changes.

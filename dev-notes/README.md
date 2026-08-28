@@ -1,11 +1,7 @@
 # Tau dev notes (contributor build-log)
 
 These are the internal, phase-by-phase build journals and design records for Tau.
-They are **not** published on the docs site — they live here for contributors who
-want to trace how the system was assembled.
-
-User-facing documentation lives in `website/content/` and is published at
-<https://twotimespi.dev/>.
+They live here for contributors who want to trace how the system was assembled.
 
 ## Contents
 

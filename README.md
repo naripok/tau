@@ -47,15 +47,39 @@ provider layer, session format, and extension API are untouched:
   `--auto-compact-threshold` flag → percentage → provider live limits →
   built-in reserve.
 
+### Removed features
+
+This fork removes features the maintainer does not use. Upstream syncs
+re-apply each removal by hand, using this list as the checklist:
+
+- Self-update machinery: the `tau update` command, the startup update check,
+  and release-notes notices.
+- The headless JSONL RPC frontend mode (`--mode rpc`).
+- The Mistral conversations transport and its provider entries.
+- The GitHub Copilot provider: the OAuth login option, the catalog entry, and
+  the `Copilot-Vision-Request` header.
+- The Hugo documentation site (`website/`, `landing.html`) and the docs and
+  publish CI workflows; exactly one test-suite workflow remains.
+- The superseded first-cycle transient-error-retry design docs under
+  `dev-notes/design/` (the `-simplified-*` set and the summary stay).
+
 ### Upstream sync
+
+To sync this fork with upstream `huggingface/tau`:
+
+1. Merge upstream `main`.
+2. Re-apply each removal by hand, using the removed-feature list above as the
+   checklist.
+3. Run the suite: `uv run pytest`, `uv run ruff check src tests`,
+   `uv run ruff format --check src tests`, `uv run mypy`.
+4. Commit.
 
 - Forked from Tau `v0.3.10` and merged upstream `main` as of `62eab4e`
   (2026-08-21), now based on Tau `v0.3.13`. The latest sync brings in
   Pi prompt argument variables, the `tau install` command (Pi-style
   extension installer), agent settlement after interrupted runs,
   narrow-TUI prompt rendering fixes, and the preceding 0.3.12 round
-  (headless Pi-compatible RPC frontend, `disable-model-invocation`
-  skills, 0.3.11 features).
+  (`disable-model-invocation` skills, 0.3.11 features).
 
 <p align="center">
   <img src="docs/assets/tau-header.svg" alt="Tau — a Python coding-agent harness inspired by Pi" width="100%" />
@@ -66,12 +90,6 @@ provider layer, session format, and extension API are untouched:
 </p>
 
 <p align="center">
-  <a href="https://twotimespi.dev/">Documentation</a>
-  ·
-  <a href="https://twotimespi.dev/quickstart/">Quickstart</a>
-  ·
-  <a href="https://twotimespi.dev/internals/architecture/">Architecture</a>
-  ·
   <a href="https://pypi.org/project/tau-ai/">PyPI</a>
   ·
   <a href="https://github.com/huggingface/tau/issues/1">Roadmap</a>
@@ -118,27 +136,9 @@ or rendering. Frontends consume events.
 ## Install
 
 Tau is published on PyPI as `tau-ai` and installs a `tau` command.
-It requires Python 3.12 or newer. The recommended installers use
-[`uv`](https://docs.astral.sh/uv/) and install it first when necessary.
+It requires Python 3.12 or newer.
 
-macOS and Linux:
-
-```bash
-curl -LsSf https://twotimespi.dev/install.sh | sh
-```
-
-Windows PowerShell:
-
-```powershell
-irm https://twotimespi.dev/install.ps1 | iex
-```
-
-The installers do not use `sudo`. They announce before installing `uv`, install
-Tau in an isolated tool environment, verify `tau --version`, and report if a
-shell restart is needed. You can [inspect the shell installer](https://twotimespi.dev/install.sh)
-or [PowerShell installer](https://twotimespi.dev/install.ps1) before running it.
-
-Already have a package manager? Install Tau directly:
+Install it with a package manager:
 
 ```bash
 uv tool install tau-ai
@@ -218,7 +218,7 @@ tau
 
 Tau ships with support for OpenAI, Anthropic, OpenAI Codex subscription auth,
 OpenRouter, Hugging Face, and custom OpenAI-compatible endpoints, including local
-models. See the [providers guide](https://twotimespi.dev/guides/providers-and-models/).
+models.
 
 The built-in catalog lives in `src/tau_coding/data/catalog.toml`; add your own
 providers and models by dropping a `~/.tau/catalog.toml` with the same schema —
@@ -250,8 +250,8 @@ Tau follows a few rules:
   executor returning a structured result.
 - **Sessions are durable and inspectable.** History is append-only JSONL; active
   context can be compacted without rewriting the record.
-- **Documentation follows implementation.** The public docs explain the result;
-  `dev-notes/` preserves the phase-by-phase build journal.
+- **Documentation follows implementation.** `dev-notes/` preserves the
+  phase-by-phase build journal.
 
 ## Use Tau as a library
 
@@ -293,28 +293,10 @@ uv run tau
 uv run tau -p "explain this repo"
 ```
 
-Run the Hugo documentation site:
-
-```bash
-cd website
-hugo server -D
-```
-
-Open <http://localhost:1313/>. Build with `hugo --minify`.
-
 ## Documentation
 
-User docs are published at <https://twotimespi.dev/> and live in
-`website/content/`.
-
-Useful entry points:
-
-- [What is Tau?](https://twotimespi.dev/what-is-tau/)
-- [Quickstart](https://twotimespi.dev/quickstart/)
-- [Core concepts](https://twotimespi.dev/concepts/)
-- [Architecture overview](https://twotimespi.dev/internals/architecture/)
-- [The agent loop & events](https://twotimespi.dev/internals/agent-loop/)
-- [CLI reference](https://twotimespi.dev/reference/cli/)
+Tau ships packaged reference docs under `src/tau_coding/data/docs/` and
+contributor build journals under `dev-notes/`.
 
 Tau is under active development. The implementation roadmap is tracked in
 [GitHub issue #1](https://github.com/huggingface/tau/issues/1).

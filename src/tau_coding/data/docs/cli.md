@@ -1,14 +1,12 @@
 # Tau CLI and commands
 
-Tau supports print mode, Pi-compatible JSONL RPC mode, and a Textual interactive TUI. The CLI entry point is `tau_coding.cli:app`.
+Tau supports print mode and a Textual interactive TUI. The CLI entry point is `tau_coding.cli:app`.
 
 For current user-facing behavior in a Tau checkout, read:
 
-- `website/content/reference/cli.md`
-- `website/content/reference/slash-commands.md`
 - `src/tau_coding/commands.py`
 
-Keep command parsing and application-specific resource loading in `tau_coding`, not the reusable `tau_agent` harness. When changing behavior, test both command results and the relevant print/TUI integration, then update published reference documentation.
+Keep command parsing and application-specific resource loading in `tau_coding`, not the reusable `tau_agent` harness. When changing behavior, test both command results and the relevant print/TUI integration.
 
 ## Project trust startup controls
 
@@ -16,7 +14,7 @@ Keep command parsing and application-specific resource loading in `tau_coding`, 
 overrides. They are parsed before protected resource loading and never persist.
 Headless modes never prompt; user-global `defaultProjectTrust` controls unresolved
 projects. Keep diagnostics on stderr for structured stdout modes. See
-`security.md` and `website/content/guides/project-trust.md`.
+`security.md`.
 
 ## System prompt startup controls
 
