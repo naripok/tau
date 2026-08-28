@@ -1873,8 +1873,7 @@ def test_provider_settings_from_json_rejects_invalid_retries() -> None:
 
 
 def test_saved_settings_reject_removed_transport() -> None:
-    # Saved settings naming the removed Mistral transport must fail parsing so
-    # no provider is ever constructed from a stale providers.json.
+    """Saved settings naming a removed transport fail parsing, so no provider is constructed."""
     with pytest.raises(ProviderConfigError, match="Unsupported provider type"):
         provider_settings_from_json(
             {

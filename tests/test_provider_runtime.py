@@ -789,7 +789,7 @@ async def test_codex_resolver_holds_the_file_lock_during_refresh(
 
 @pytest.mark.anyio
 async def test_runtime_oauth_resolver_holds_the_file_lock_during_refresh(
-    tmp_path,
+    tmp_path, register_gateway_oauth_provider
 ) -> None:
     """The file lock wraps the OAuth runtime re-read, refresh, and write."""
     store = FileCredentialStore(tmp_path / "credentials.json")
@@ -820,12 +820,8 @@ async def test_runtime_oauth_resolver_holds_the_file_lock_during_refresh(
             return OAuthRuntimeAuth(api_key=credential.access)
 
     provider = provider_config_from_catalog_entry("anthropic")
-    register_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
-    try:
-        auth = await OAuthRuntimeCredentialResolver(provider, credential_store=store)()
-    finally:
-        unregister_oauth_provider("anthropic")
-        reset_oauth_providers()
+    register_gateway_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
+    auth = await OAuthRuntimeCredentialResolver(provider, credential_store=store)()
 
     assert auth.api_key == "new-access"
     assert Path(f"{store.path}.lock").exists()
@@ -850,7 +846,7 @@ def test_file_refresh_lock_is_a_persistent_sibling_of_the_store(tmp_path) -> Non
 
 @pytest.mark.anyio
 async def test_oauth_runtime_refresh_fails_when_the_file_lock_is_unavailable(
-    tmp_path,
+    tmp_path, register_gateway_oauth_provider
 ) -> None:
     """A failed lock acquisition fails the refresh; it never proceeds unlocked.
 
@@ -881,11 +877,7 @@ async def test_oauth_runtime_refresh_fails_when_the_file_lock_is_unavailable(
             raise AssertionError("not used")
 
     provider = provider_config_from_catalog_entry("anthropic")
-    register_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
+    register_gateway_oauth_provider(cast(OAuthProvider, FakeOAuthProvider()))
     resolver = OAuthRuntimeCredentialResolver(provider, credential_store=store)
-    try:
-        with pytest.raises(OSError):
-            await resolver()
-    finally:
-        unregister_oauth_provider("anthropic")
-        reset_oauth_providers()
+    with pytest.raises(OSError):
+        await resolver()

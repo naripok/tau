@@ -358,12 +358,8 @@ def test_sessions_command_reports_no_sessions(monkeypatch: pytest.MonkeyPatch) -
 
 
 def _enable_startup_update_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Isolate home and remove the update-check env gates from the environment.
-
-    The helper keeps the startup tests meaningful across the update-check
-    module deletion; nothing in the shipped code reads these variables
-    anymore, so the tests exercise startup behavior under a controlled
-    environment.
+    """Isolates the home directory and clears the environment gates so the startup path
+    runs its full update-check segment.
     """
     isolate_home(monkeypatch, tmp_path)
     monkeypatch.delenv("TAU_NO_UPDATE_CHECK", raising=False)
@@ -371,11 +367,8 @@ def _enable_startup_update_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 def _seed_update_check_cache() -> None:
-    """Pre-seed a fresh update-check cache file under the isolated home.
-
-    The helper keeps the startup tests meaningful across the update-check
-    module deletion; nothing in the shipped code reads this cache path
-    anymore, so the tests cover startup with a populated cache in place.
+    """Seeds a valid update-check cache so the startup path computes an update notice
+    without network access.
     """
     cache_path = Path.home() / ".tau" / "cache" / "update-check.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -390,13 +383,15 @@ def _seed_update_check_cache() -> None:
     )
 
 
-def _fail_on_http_get(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+def _fail_on_http_get(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[tuple[object, ...], dict[str, object]]]:
     """Patch httpx.get to record every call and raise; return the call log.
 
     The tests assert the recorded call log is empty, so startup stays free of
     outbound HTTP requests even where CLI code catches exceptions.
     """
-    calls: list[object] = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def record_and_raise(*args: object, **kwargs: object) -> None:
         calls.append((args, kwargs))
@@ -407,6 +402,7 @@ def _fail_on_http_get(monkeypatch: pytest.MonkeyPatch) -> list[object]:
 
 
 def test_update_command_is_unknown() -> None:
+    """The bare ``update`` command is rejected as an unknown command."""
     result = CliRunner().invoke(app, ["update"])
 
     assert result.exit_code != 0
@@ -416,6 +412,7 @@ def test_update_command_is_unknown() -> None:
 def test_update_as_prompt_word_starts_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """An ``update`` word in prompt position starts a session with the joined prompt."""
     calls: list[str | None] = []
 
     async def fake_run_openai_tui(
@@ -441,6 +438,7 @@ def test_update_as_prompt_word_starts_session(
 
 
 def test_no_startup_notice_in_tui(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A recent update check suppresses the startup notice in the TUI path."""
     _enable_startup_update_check(monkeypatch, tmp_path)
     _seed_update_check_cache()
     captured: list[tuple[object, ...]] = []
@@ -459,6 +457,7 @@ def test_no_startup_notice_in_tui(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 
 def test_no_startup_notice_in_print_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A recent update check leaves print-mode startup stderr empty."""
     _enable_startup_update_check(monkeypatch, tmp_path)
     _seed_update_check_cache()
 
@@ -477,6 +476,7 @@ def test_no_startup_notice_in_print_mode(monkeypatch: pytest.MonkeyPatch, tmp_pa
 def test_no_outbound_request_during_startup_tui(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """TUI startup makes no outbound HTTP requests."""
     _enable_startup_update_check(monkeypatch, tmp_path)
     http_calls = _fail_on_http_get(monkeypatch)
 
@@ -494,6 +494,7 @@ def test_no_outbound_request_during_startup_tui(
 def test_no_outbound_request_during_startup_print_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Print-mode startup makes no outbound HTTP requests."""
     _enable_startup_update_check(monkeypatch, tmp_path)
     http_calls = _fail_on_http_get(monkeypatch)
 

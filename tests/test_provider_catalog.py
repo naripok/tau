@@ -492,6 +492,7 @@ def test_user_catalog_adds_new_provider(tmp_path: Path) -> None:
 
 
 def test_user_catalog_rejects_removed_transport(tmp_path: Path) -> None:
+    """A removed transport in a user catalog fails to load, so no provider or request is built."""
     paths = _write_user_catalog(
         tmp_path / ".tau",
         """
@@ -508,8 +509,6 @@ api = "mistral-conversations"
 """,
     )
 
-    # The removed transport must fail at load time so no provider and no
-    # request can ever be built from a stale user catalog entry.
     with pytest.raises(CatalogError):
         effective_catalog(paths)
 
