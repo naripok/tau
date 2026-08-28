@@ -13,7 +13,6 @@ ProviderKind = Literal[
     "anthropic",
     "openai-codex",
     "google-generative-ai",
-    "mistral-conversations",
 ]
 ProviderApi = Literal[
     "openai-completions",
@@ -21,7 +20,6 @@ ProviderApi = Literal[
     "anthropic-messages",
     "openai-codex-responses",
     "google-generative-ai",
-    "mistral-conversations",
 ]
 ModelInput = Literal["text", "image"]
 ThinkingLevelMap = dict[ThinkingLevel, str | None]

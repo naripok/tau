@@ -18,7 +18,6 @@ from tau_agent.provider import ModelProvider
 from tau_ai.anthropic import AnthropicProvider
 from tau_ai.env import AnthropicConfig, RuntimeProviderAuth
 from tau_ai.google import GoogleGenerativeAIProvider
-from tau_ai.mistral import MistralConversationsProvider
 from tau_ai.openai_codex import (
     OpenAICodexConfig,
     OpenAICodexCredentials,
@@ -185,8 +184,6 @@ def create_model_provider(
             return AnthropicProvider(anthropic_config)
         if selected_api == "google-generative-ai":
             return GoogleGenerativeAIProvider(compatible_config)
-        if selected_api == "mistral-conversations":
-            return MistralConversationsProvider(compatible_config)
         return OpenAICompatibleProvider(compatible_config)
     raise ProviderConfigError(f"Unsupported provider config: {provider.name}")
 

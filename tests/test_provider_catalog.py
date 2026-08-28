@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
 
+from tau_ai import GoogleGenerativeAIProvider, OpenAICompatibleProvider
 from tau_coding.catalog_loader import (
     CatalogError,
     builtin_catalog,
@@ -14,13 +16,19 @@ from tau_coding.catalog_loader import (
     save_user_catalog_entries,
     user_catalog_path,
 )
+from tau_coding.credentials import FileCredentialStore
 from tau_coding.paths import TauPaths
 from tau_coding.provider_catalog import (
     BUILTIN_PROVIDER_CATALOG,
     builtin_provider_entry,
     model_cost_for_input_tokens,
 )
-from tau_coding.provider_config import load_provider_settings
+from tau_coding.provider_config import (
+    OpenAICompatibleProviderConfig,
+    load_provider_settings,
+    provider_config_from_entry,
+)
+from tau_coding.provider_runtime import create_model_provider
 
 VALID_PROVIDER = """
 [[providers]]
@@ -64,7 +72,6 @@ def test_builtin_catalog_matches_expected_providers() -> None:
         "nvidia",
         "openrouter",
         "zai",
-        "mistral",
         "minimax",
         "minimax-cn",
         "moonshotai",
@@ -536,6 +543,29 @@ def test_user_catalog_adds_new_provider(tmp_path: Path) -> None:
     assert entry.thinking_levels == ("off", "low", "medium", "high")
 
 
+def test_user_catalog_rejects_removed_transport(tmp_path: Path) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[[providers]]
+name = "mistral"
+display_name = "Mistral"
+kind = "mistral-conversations"
+base_url = "https://api.mistral.ai"
+api_key_env = "MISTRAL_API_KEY"
+models = ["mistral-large-latest"]
+default_model = "mistral-large-latest"
+docs_url = "https://docs.mistral.ai"
+api = "mistral-conversations"
+""",
+    )
+
+    # The removed transport must fail at load time so no provider and no
+    # request can ever be built from a stale user catalog entry.
+    with pytest.raises(CatalogError):
+        effective_catalog(paths)
+
+
 def test_user_catalog_overlays_builtin_provider(tmp_path: Path) -> None:
     paths = _write_user_catalog(
         tmp_path / ".tau",
@@ -850,3 +880,23 @@ def test_user_catalog_provider_appears_with_existing_settings_file(tmp_path: Pat
     )
     settings = load_provider_settings(paths)
     assert settings.get_provider("nebius").models[0] == "deepseek-ai/DeepSeek-V4-Pro"
+
+
+def test_builtin_catalog_only_constructible_kinds(tmp_path: Path) -> None:
+    raw = tomllib.loads(builtin_catalog_resource_text())
+    for provider in raw["providers"]:
+        assert provider["kind"] != "mistral-conversations"
+        assert provider.get("api") != "mistral-conversations"
+
+    # The picker must list only providers the runtime can construct, so every
+    # entry resolves to a durable config and every openai-compatible-family
+    # entry builds a runtime provider with credentials present.
+    store = FileCredentialStore(tmp_path / "credentials.json")
+    for entry in BUILTIN_PROVIDER_CATALOG:
+        config = provider_config_from_entry(entry)
+        if not isinstance(config, OpenAICompatibleProviderConfig):
+            continue
+        assert entry.credential_name is not None
+        store.set_api_key(entry.credential_name, "fake-key")
+        provider = create_model_provider(config, credential_store=store)
+        assert isinstance(provider, OpenAICompatibleProvider | GoogleGenerativeAIProvider)

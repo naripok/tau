@@ -107,7 +107,6 @@ def test_load_provider_settings_missing_file_uses_openai_default(tmp_path: Path)
         "nvidia",
         "openrouter",
         "zai",
-        "mistral",
         "minimax",
         "minimax-cn",
         "moonshotai",
@@ -1870,6 +1869,29 @@ def test_provider_settings_from_json_rejects_invalid_retries() -> None:
                         "max_retries": -1,
                     }
                 ],
+            }
+        )
+
+
+def test_saved_settings_reject_removed_transport() -> None:
+    # Saved settings naming the removed Mistral transport must fail parsing so
+    # no provider is ever constructed from a stale providers.json.
+    with pytest.raises(ProviderConfigError, match="Unsupported provider type"):
+        provider_settings_from_json(
+            {
+                "default_provider": "mistral",
+                "providers": [
+                    {
+                        "type": "mistral-conversations",
+                        "name": "mistral",
+                        "base_url": "https://api.mistral.ai",
+                        "api": "mistral-conversations",
+                        "api_key_env": "MISTRAL_API_KEY",
+                        "models": ["mistral-large-latest"],
+                        "default_model": "mistral-large-latest",
+                    }
+                ],
+                "scoped_models": [],
             }
         )
 

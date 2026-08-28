@@ -466,8 +466,6 @@ def _default_api_for_kind(kind: str) -> ProviderApi:
         return "openai-codex-responses"
     if kind == "google-generative-ai":
         return "google-generative-ai"
-    if kind == "mistral-conversations":
-        return "mistral-conversations"
     return "openai-completions"
 
 
@@ -1744,11 +1742,11 @@ def provider_kind(provider: ProviderConfig) -> ProviderKind:
         return "anthropic"
     if isinstance(provider, OpenAICodexProviderConfig):
         return "openai-codex"
-    if isinstance(provider, OpenAICompatibleProviderConfig):
-        if provider.api == "google-generative-ai":
-            return "google-generative-ai"
-        if provider.api == "mistral-conversations":
-            return "mistral-conversations"
+    if (
+        isinstance(provider, OpenAICompatibleProviderConfig)
+        and provider.api == "google-generative-ai"
+    ):
+        return "google-generative-ai"
     return "openai-compatible"
 
 
@@ -1947,7 +1945,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
         "anthropic",
         "openai-codex",
         "google-generative-ai",
-        "mistral-conversations",
     }:
         raise ProviderConfigError(f"Unsupported provider type: {provider_type}")
     name = _string(data.get("name"), "providers[].name")
@@ -2308,7 +2305,6 @@ def _optional_provider_api(value: object, field_name: str) -> ProviderApi | None
         "anthropic-messages",
         "openai-codex-responses",
         "google-generative-ai",
-        "mistral-conversations",
     }:
         return cast(ProviderApi, value)
     raise ProviderConfigError(f"Provider field has unsupported API: {field_name}")
