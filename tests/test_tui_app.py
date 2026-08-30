@@ -5664,10 +5664,43 @@ async def test_tui_app_session_picker_shows_human_readable_session_metadata() ->
 
     assert labels == [
         "2026-06-19 14:30 - fake-model",
-        "2026-06-19 14:30 - other-model - Named work",
+        "2026-06-19 14:30 - Named work - other-model",
     ]
     assert "session-1" not in "\n".join(str(label) for label in labels)
     assert "Untitled session" not in "\n".join(str(label) for label in labels)
+
+
+@pytest.mark.anyio
+async def test_tui_app_session_picker_fills_most_of_the_screen() -> None:
+    updated_at = datetime(2026, 6, 19, 14, 30).timestamp()
+    session = FakeSession()
+    session.session_manager = _FakeSessionManager(
+        [
+            CodingSessionRecord(
+                id="session-1",
+                path=Path("/tmp/session-1.jsonl"),
+                cwd=Path("/workspace/project"),
+                model="fake-model",
+                title="Named work",
+                created_at=1.0,
+                updated_at=updated_at,
+            )
+        ]
+    )
+    app = TauTuiApp(session)
+
+    async with app.run_test(size=(120, 60)) as pilot:
+        await pilot.press("ctrl+r")
+        assert isinstance(app.screen, SessionPickerScreen)
+        container = app.screen.query_one("#session-picker")
+        listing = app.screen.query_one("#session-picker-list")
+
+        # The picker occupies ~90% of the screen in both dimensions.
+        assert container.region.width == pytest.approx(0.9 * 120, abs=2)
+        assert container.region.height == pytest.approx(0.9 * 60, abs=2)
+
+        # The list stretches to fill the picker instead of capping at 16 rows.
+        assert listing.region.height > 16
 
 
 @pytest.mark.anyio
@@ -5747,7 +5780,7 @@ async def test_tui_app_session_picker_search_filters_sessions() -> None:
 
         session_list = app.screen.query_one("#session-picker-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in session_list.children]
-        assert labels == ["2026-06-19 14:30 - other-model - Add search bar"]
+        assert labels == ["2026-06-19 14:30 - Add search bar - other-model"]
 
         await pilot.press("enter")
         await pilot.pause()

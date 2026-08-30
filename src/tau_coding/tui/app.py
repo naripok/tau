@@ -3169,7 +3169,16 @@ class TauTuiApp(App[None]):
         align: center middle;
     }
 
-    #session-picker,
+    # The resume picker fills most of the screen; other pickers keep the
+    # compact shared sizing below.
+    #session-picker {
+        width: 90%;
+        height: 90%;
+        padding: 1 2;
+        background: $tau-chrome-background;
+        border: tall $tau-border;
+    }
+
     #prompt-template-picker,
     #prompt-template-editor,
     #skill-picker,
@@ -3230,7 +3239,12 @@ class TauTuiApp(App[None]):
         border: tall $tau-prompt-border;
     }
 
-    #session-picker-list,
+    #session-picker-list {
+        height: 1fr;
+        background: $tau-transcript-background;
+        border: tall $tau-border;
+    }
+
     #prompt-template-picker-list,
     #skill-picker-list,
     #tree-picker-list,
@@ -6629,11 +6643,11 @@ def _short_path(path: Path) -> str:
 
 def _session_picker_label(record: SessionCompletionRecord) -> str:
     parts = [_session_updated_at_label(record.updated_at)]
-    if record.model:
-        parts.append(record.model)
     title = _named_session_title(record.title)
     if title is not None:
         parts.append(title)
+    if record.model:
+        parts.append(record.model)
     return " - ".join(parts)
 
 
