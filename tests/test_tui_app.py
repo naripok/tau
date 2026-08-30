@@ -5856,6 +5856,29 @@ async def test_tui_app_session_picker_search_with_no_matches_shows_help_text() -
 
 
 @pytest.mark.anyio
+async def test_tui_app_tree_picker_fills_most_of_the_screen() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test(size=(120, 60)) as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/tree"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TreePickerScreen)
+        container = app.screen.query_one("#tree-picker")
+        listing = app.screen.query_one("#tree-picker-list", ListView)
+
+        # The picker occupies ~90% of the screen in both dimensions.
+        assert container.region.width == pytest.approx(0.9 * 120, abs=2)
+        assert container.region.height == pytest.approx(0.9 * 60, abs=2)
+
+        # The list stretches to fill the picker instead of capping at 16 rows.
+        assert listing.region.height > 16
+
+
+@pytest.mark.anyio
 async def test_tui_app_blocks_tree_picker_while_agent_is_running() -> None:
     session = FakeSession()
     app = TauTuiApp(session)

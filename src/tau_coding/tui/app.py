@@ -3169,9 +3169,10 @@ class TauTuiApp(App[None]):
         align: center middle;
     }
 
-    # The resume picker fills most of the screen; other pickers keep the
-    # compact shared sizing below.
-    #session-picker {
+    # The resume and tree pickers fill most of the screen; other pickers keep
+    # the compact shared sizing below.
+    #session-picker,
+    #tree-picker {
         width: 90%;
         height: 90%;
         padding: 1 2;
@@ -3182,7 +3183,6 @@ class TauTuiApp(App[None]):
     #prompt-template-picker,
     #prompt-template-editor,
     #skill-picker,
-    #tree-picker,
     #tools-reference {
         width: 76;
         max-width: 90%;
@@ -3239,7 +3239,8 @@ class TauTuiApp(App[None]):
         border: tall $tau-prompt-border;
     }
 
-    #session-picker-list {
+    #session-picker-list,
+    #tree-picker-list {
         height: 1fr;
         background: $tau-transcript-background;
         border: tall $tau-border;
@@ -3247,7 +3248,6 @@ class TauTuiApp(App[None]):
 
     #prompt-template-picker-list,
     #skill-picker-list,
-    #tree-picker-list,
     #tools-reference-list {
         height: auto;
         max-height: 16;
