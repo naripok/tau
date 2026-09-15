@@ -31,16 +31,16 @@ def exclusive_file_lock(target: Path) -> Iterator[None]:
         return
     handle = lock_path.open("a+b")
     try:
-        _lock_file(handle)
+        lock_file(handle)
         try:
             yield
         finally:
-            _unlock_file(handle)
+            unlock_file(handle)
     finally:
         handle.close()
 
 
-def _lock_file(handle: IO[bytes]) -> None:
+def lock_file(handle: IO[bytes]) -> None:
     """Lock ``handle`` exclusively; an ``OSError`` propagates to the caller."""
     if os.name == "nt":
         import msvcrt
@@ -53,14 +53,17 @@ def _lock_file(handle: IO[bytes]) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
 
 
-def _unlock_file(handle: IO[bytes]) -> None:
+def unlock_file(handle: IO[bytes]) -> None:
     """Release the advisory lock; closing ``handle`` releases it either way."""
-    if os.name == "nt":
-        import msvcrt
+    try:
+        if os.name == "nt":
+            import msvcrt
 
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-    else:
-        import fcntl
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+        else:
+            import fcntl
 
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass

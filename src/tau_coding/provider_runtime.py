@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from asyncio import AbstractEventLoop, get_running_loop
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from dataclasses import replace
-from importlib.util import find_spec
 from os import environ
 from pathlib import Path
-from typing import IO, Protocol
+from typing import Protocol
 from weakref import WeakKeyDictionary
 
 from tau_agent.provider import ModelProvider
@@ -25,6 +23,7 @@ from tau_ai.openai_codex import (
 )
 from tau_ai.openai_compatible import OpenAICompatibleProvider
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
+from tau_coding.file_locks import exclusive_file_lock
 from tau_coding.oauth import (
     account_id_from_access_token,
     oauth_credential_is_expired,
@@ -339,57 +338,10 @@ def _file_refresh_lock(store_path: Path) -> Iterator[None]:
     exclusive advisory lock on ``<store_path>.lock`` held across the re-read,
     refresh, and write keeps a rotated refresh token spent at most once: the
     loser of the lock re-reads the rotated credential and skips its own
-    refresh. The lock file is a persistent sibling of the credential file;
-    deleting it reopens the race, so nothing removes it.
-
-    A platform with no ``flock`` or ``msvcrt`` primitive has no cross-process
-    lock and keeps the in-process lock as the only serialization; on every
-    platform with a primitive, an ``OSError`` from opening or locking the
-    file is a hard error so a refresh never proceeds unlocked.
+    refresh.
     """
-    lock_path = Path(f"{store_path}.lock")
-    primitive = "msvcrt" if os.name == "nt" else "fcntl"
-    if find_spec(primitive) is None:
+    with exclusive_file_lock(store_path):
         yield
-        return
-    handle = lock_path.open("a+b")
-    try:
-        _lock_refresh_file(handle)
-        try:
-            yield
-        finally:
-            _unlock_refresh_file(handle)
-    finally:
-        handle.close()
-
-
-def _lock_refresh_file(handle: IO[bytes]) -> None:
-    """Lock ``handle`` exclusively; an ``OSError`` propagates to the caller."""
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
-    else:
-        import fcntl
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-
-
-def _unlock_refresh_file(handle: IO[bytes]) -> None:
-    """Release the advisory lock; closing ``handle`` releases it either way."""
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    except OSError:
-        pass
 
 
 def _oauth_credential(
