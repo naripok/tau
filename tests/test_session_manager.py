@@ -180,6 +180,47 @@ def test_session_manager_prepares_unindexed_session(tmp_path: Path) -> None:
     assert manager.list_sessions(cwd) == [record]
 
 
+def test_session_manager_records_session_role(tmp_path: Path) -> None:
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+
+    record = manager.create_session(cwd=cwd, model="fake", role="subagent")
+
+    assert record.role == "subagent"
+    # get_session reads from the index file, so this proves the role round-trips
+    # through the JSONL index instead of living only on the in-memory record.
+    assert manager.get_session(record.id) == record
+
+
+def test_session_manager_hides_subagent_sessions_from_default_lists(tmp_path: Path) -> None:
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    main_session = manager.create_session(cwd=cwd, model="fake", session_id="main")
+    subagent = manager.create_session(cwd=cwd, model="fake", session_id="worker", role="subagent")
+
+    assert manager.list_sessions() == [main_session]
+    assert manager.list_sessions(cwd) == [main_session]
+    assert manager.list_sessions(include_subagents=True) == [subagent, main_session]
+    assert manager.list_sessions(cwd, include_subagents=True) == [subagent, main_session]
+    # Explicit id lookups stay unfiltered so `tau --session <id>` and `tau export`
+    # keep working on subagent transcripts.
+    assert manager.get_session("worker") == subagent
+
+
+def test_session_manager_touch_preserves_role(tmp_path: Path) -> None:
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    record = manager.create_session(cwd=cwd, model="fake", role="subagent")
+
+    updated = manager.touch_session(record.id, model="new-model")
+
+    assert updated is not None
+    assert updated.role == "subagent"
+
+
 def test_session_manager_filters_sessions_by_project_cwd(tmp_path: Path) -> None:
     manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
     first_cwd = tmp_path / "first"

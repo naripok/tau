@@ -20,6 +20,7 @@ They live here for contributors who want to trace how the system was assembled.
   later phases use it.
 - `adr/` — architecture decision records.
 - `catalog-model-safety.md` — checklist for adding providers and models to the built-in catalog safely.
+- `session-roles.md` — why delegated subagent sessions carry a role and stay out of `/resume`.
 - `startup-thinking-level-fallback.md` — why startup resolves a valid thinking
   level per model instead of assuming the global `medium` default.
 

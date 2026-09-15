@@ -1254,6 +1254,76 @@ def test_create_print_session_uses_requested_id_and_rejects_collision(tmp_path: 
         )
 
 
+def test_print_mode_passes_session_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str | None] = []
+
+    async def fake_run_openai_print_mode(
+        prompt: str,
+        model: str | None,
+        cwd: Path,
+        output: PrintOutputMode,
+        provider_name: str | None,
+        *extra: object,
+        session_role: str | None = None,
+    ) -> bool:
+        del prompt, model, cwd, output, provider_name, extra
+        calls.append(session_role)
+        return True
+
+    monkeypatch.setattr(cli, "run_openai_print_mode", fake_run_openai_print_mode)
+
+    result = CliRunner().invoke(app, ["--mode", "json", "--session-role", "subagent", "hello"])
+
+    assert result.exit_code == 0
+    assert calls == ["subagent"]
+
+
+def test_print_mode_rejects_invalid_session_role() -> None:
+    result = CliRunner().invoke(app, ["-p", "--session-role", "boss", "hello"])
+
+    assert result.exit_code == 2
+    assert "Unknown session role: boss" in _strip_ansi(result.output)
+
+
+def test_session_role_is_print_mode_only() -> None:
+    result = CliRunner().invoke(app, ["--session-role", "subagent"])
+
+    assert result.exit_code == 2
+    assert "--session-role is only supported in print mode" in _strip_ansi(result.output)
+
+
+def test_print_mode_rejects_session_and_session_role() -> None:
+    result = CliRunner().invoke(
+        app,
+        ["-p", "--session", "session-123", "--session-role", "subagent", "follow up"],
+    )
+
+    assert result.exit_code == 2
+    assert "--session-role cannot be used with --session" in _strip_ansi(result.output)
+
+
+def test_print_session_record_stamps_subagent_role(tmp_path: Path) -> None:
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+
+    record = cli._print_session_record(
+        manager,
+        resume_session_id=None,
+        cwd=tmp_path,
+        settings=_constrained_provider_settings(),
+        provider_name=None,
+        model="qwen",
+        session_id=None,
+        session_role="subagent",
+    )
+
+    assert record.role == "subagent"
+    # The role must keep the child session out of the default resume listing
+    # while explicit id lookups still resolve it.
+    assert manager.list_sessions(tmp_path) == []
+    assert manager.list_sessions(tmp_path, include_subagents=True) == [record]
+    assert manager.get_session(record.id) == record
+
+
 def test_cli_exits_nonzero_when_print_mode_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_openai_print_mode(
         prompt: str,
@@ -1633,6 +1703,49 @@ def test_sessions_command_handles_empty_index(monkeypatch: pytest.MonkeyPatch) -
 
     assert result.exit_code == 0
     assert "No sessions found." in result.stdout
+
+
+def test_sessions_command_hides_subagents_unless_all_requested(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    main_record = CodingSessionRecord(
+        id="session-1",
+        path=tmp_path / "session.jsonl",
+        cwd=tmp_path,
+        model="fake",
+        title="Top level",
+        created_at=1.0,
+        updated_at=2.0,
+    )
+    subagent_record = CodingSessionRecord(
+        id="sub-1",
+        path=tmp_path / "sub.jsonl",
+        cwd=tmp_path,
+        model="fake",
+        title="Worker",
+        created_at=1.0,
+        updated_at=3.0,
+        role="subagent",
+    )
+
+    class FakeSessionManager:
+        def list_sessions(
+            self, cwd: Path | None = None, *, include_subagents: bool = False
+        ) -> list[CodingSessionRecord]:
+            del cwd
+            records = [main_record, subagent_record]
+            return [item for item in records if include_subagents or item.role != "subagent"]
+
+    monkeypatch.setattr(cli, "SessionManager", FakeSessionManager)
+
+    default = CliRunner().invoke(app, ["sessions"])
+    everything = CliRunner().invoke(app, ["sessions", "--all"])
+
+    assert default.exit_code == 0
+    assert "session-1" in default.stdout
+    assert "sub-1" not in default.stdout
+    assert everything.exit_code == 0
+    assert "sub-1" in everything.stdout
 
 
 @pytest.mark.anyio

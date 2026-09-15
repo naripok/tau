@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import sys
 from os import environ
 from pathlib import Path
@@ -54,7 +55,12 @@ from tau_coding.session_export import (
     export_session_artifact,
     normalize_export_format,
 )
-from tau_coding.session_manager import CodingSessionRecord, SessionManager, validate_session_id
+from tau_coding.session_manager import (
+    CodingSessionRecord,
+    SessionManager,
+    validate_session_id,
+    validate_session_role,
+)
 from tau_coding.shell_config import load_shell_settings
 from tau_coding.tui import run_tui_app
 from tau_coding.version import current_version as _current_version
@@ -266,11 +272,26 @@ def main(
         bool,
         typer.Option("--new-session", help="Create a new session in TUI mode (default)."),
     ] = False,
+    session_all: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Include subagent sessions in the `sessions` listing.",
+        ),
+    ] = False,
     session_id: Annotated[
         str | None,
         typer.Option(
             "--session-id",
             help="Set the exact id for the newly created print-mode session.",
+        ),
+    ] = None,
+    session_role: Annotated[
+        str | None,
+        typer.Option(
+            "--session-role",
+            help="Tag the new print-mode session with a role (e.g. subagent) so it "
+            "stays out of the default session listing.",
         ),
     ] = None,
     system_prompt: Annotated[
@@ -396,6 +417,16 @@ def main(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
 
+    if session_role is not None:
+        if not print_requested:
+            raise typer.BadParameter("--session-role is only supported in print mode")
+        if session is not None:
+            raise typer.BadParameter("--session-role cannot be used with --session")
+        try:
+            validate_session_role(session_role)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
     positional_args = prompt_args or []
     command = positional_args[0] if positional_args else None
     initial_prompt = " ".join(positional_args) if positional_args else None
@@ -407,9 +438,25 @@ def main(
         install_command(positional_args[1:])
         raise typer.Exit()
 
-    if not print_requested and not export and command == "sessions" and len(positional_args) == 1:
-        render_session_list(SessionManager().list_sessions())
-        raise typer.Exit()
+    if not print_requested and not export and command == "sessions":
+        # The group parser does not intersperse options after positionals, so
+        # `tau sessions --all` arrives here with `--all` inside prompt_args.
+        show_all = session_all
+        rest: list[str] = []
+        for arg in positional_args[1:]:
+            if arg == "--all":
+                show_all = True
+            else:
+                rest.append(arg)
+        if not rest:
+            manager = SessionManager()
+            records = (
+                manager.list_sessions(include_subagents=True)
+                if show_all
+                else manager.list_sessions()
+            )
+            render_session_list(records)
+            raise typer.Exit()
 
     if not print_requested and not export and command == "export":
         _run_export_cli(positional_args[1:])
@@ -496,10 +543,14 @@ def main(
         if session is not None:
             ok = anyio.run(run_openai_print_mode, *print_args, trust_override, session)
         else:
+            extra: dict[str, object] = (
+                {"session_role": session_role} if session_role is not None else {}
+            )
+            print_fn = functools.partial(run_openai_print_mode, *print_args, **extra)
             ok = (
-                anyio.run(run_openai_print_mode, *print_args)
+                anyio.run(print_fn)
                 if trust_override is None
-                else anyio.run(run_openai_print_mode, *print_args, trust_override)
+                else anyio.run(print_fn, trust_override)
             )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -540,7 +591,9 @@ async def run_openai_tui(
     )
 
 
-def render_session_list(records: list[CodingSessionRecord]) -> None:
+def render_session_list(
+    records: list[CodingSessionRecord], *, include_subagents: bool = False
+) -> None:
     """Render indexed sessions for the CLI."""
     if not records:
         typer.echo("No sessions found.")
@@ -775,6 +828,7 @@ async def run_openai_print_mode(
     append_system_prompt: str | None = None,
     trust_override: TrustOverride | None = None,
     resume_session_id: str | None = None,
+    session_role: str | None = None,
 ) -> bool:
     """Run a new or resumed print-mode turn using the configured provider."""
     settings = load_provider_settings()
@@ -788,6 +842,7 @@ async def run_openai_print_mode(
         provider_name=provider_name,
         model=model,
         session_id=session_id,
+        session_role=session_role,
     )
     explicit_selection = provider_name is not None or model is not None
     selection = resolve_provider_selection(
@@ -849,6 +904,7 @@ def _print_session_record(
     provider_name: str | None,
     model: str | None,
     session_id: str | None,
+    session_role: str | None = None,
 ) -> CodingSessionRecord:
     """Resolve a resumed transcript or exclusively create a new one."""
     if resume_session_id is not None:
@@ -871,6 +927,7 @@ def _print_session_record(
         provider_name=selection.provider.name,
         inference_provider=inference_provider,
         session_id=session_id,
+        session_role=session_role,
     )
 
 
@@ -882,6 +939,7 @@ def _create_print_session(
     provider_name: str | None = None,
     inference_provider: str | None = None,
     session_id: str | None = None,
+    session_role: str | None = None,
 ) -> CodingSessionRecord:
     """Create an isolated print-mode session, refusing transcript collisions."""
     return manager.create_session_exclusive(
@@ -890,6 +948,7 @@ def _create_print_session(
         provider_name=provider_name,
         inference_provider=inference_provider,
         session_id=session_id,
+        role=session_role,
     )
 
 

@@ -19,6 +19,13 @@ from tau_coding.paths import TauPaths
 
 _MAX_SESSION_ID_BYTES = 128
 _RESERVED_SESSION_IDS = frozenset({"default", "index"})
+
+#: Sessions created by delegated child runs (agents driving other agents) carry
+#: this role. They are indexed for inspectability but hidden from session
+#: listings by default so `/resume` and `tau sessions` only show top-level
+#: sessions. Explicit id lookups never filter.
+SUBAGENT_SESSION_ROLE = "subagent"
+_SESSION_ROLES = frozenset({SUBAGENT_SESSION_ROLE})
 _WINDOWS_RESERVED_FILE_STEMS = frozenset(
     {"aux", "con", "nul", "prn"}
     | {f"com{index}" for index in range(1, 10)}
@@ -43,6 +50,13 @@ def validate_session_id(session_id: str) -> None:
         raise ValueError(f"Session id is not a portable file name: {session_id}")
 
 
+def validate_session_role(role: str) -> None:
+    """Reject unknown session roles so index metadata stays interpretable."""
+    if role not in _SESSION_ROLES:
+        known = ", ".join(sorted(_SESSION_ROLES))
+        raise ValueError(f"Unknown session role: {role}. Valid roles: {known}")
+
+
 class SessionRecordModel(BaseModel):
     """JSON-serializable coding-session metadata."""
 
@@ -55,6 +69,7 @@ class SessionRecordModel(BaseModel):
     provider_name: str | None = None
     inference_provider: str | None = None
     title: str | None = None
+    role: str | None = None
     created_at: float
     updated_at: float
 
@@ -72,6 +87,7 @@ class CodingSessionRecord:
     updated_at: float
     provider_name: str | None = None
     inference_provider: str | None = None
+    role: str | None = None
 
     @classmethod
     def from_model(cls, model: SessionRecordModel) -> CodingSessionRecord:
@@ -86,6 +102,7 @@ class CodingSessionRecord:
             updated_at=model.updated_at,
             provider_name=model.provider_name,
             inference_provider=model.inference_provider,
+            role=model.role,
         )
 
     def to_model(self) -> SessionRecordModel:
@@ -100,6 +117,7 @@ class CodingSessionRecord:
             updated_at=self.updated_at,
             provider_name=self.provider_name,
             inference_provider=self.inference_provider,
+            role=self.role,
         )
 
 
@@ -118,14 +136,20 @@ class SessionManager:
         """Return the session metadata index path for a project cwd."""
         return self.paths.project_session_dir(cwd) / "index.jsonl"
 
-    def list_sessions(self, cwd: Path | None = None) -> list[CodingSessionRecord]:
+    def list_sessions(
+        self, cwd: Path | None = None, *, include_subagents: bool = False
+    ) -> list[CodingSessionRecord]:
         """Return indexed sessions, newest updated first.
 
         When `cwd` is provided, only sessions for that resolved working directory
         are returned. Without `cwd`, records are aggregated across project
-        indexes and the legacy global index.
+        indexes and the legacy global index. Subagent sessions are hidden unless
+        `include_subagents` is set; resume pickers and session listings want
+        top-level sessions only.
         """
         records = self._read_project_records(cwd) if cwd is not None else self._read_all_records()
+        if not include_subagents:
+            records = [record for record in records if record.role != SUBAGENT_SESSION_ROLE]
         return sorted(records, key=lambda record: record.updated_at, reverse=True)
 
     def get_session(self, session_id: str) -> CodingSessionRecord | None:
@@ -149,6 +173,7 @@ class SessionManager:
         inference_provider: str | None = None,
         title: str | None = None,
         session_id: str | None = None,
+        role: str | None = None,
     ) -> CodingSessionRecord:
         """Create and index a new session record."""
         record = self.prepare_session(
@@ -158,6 +183,7 @@ class SessionManager:
             inference_provider=inference_provider,
             title=title,
             session_id=session_id,
+            role=role,
         )
         self.index_session(record)
         return record
@@ -171,6 +197,7 @@ class SessionManager:
         inference_provider: str | None = None,
         title: str | None = None,
         session_id: str | None = None,
+        role: str | None = None,
     ) -> CodingSessionRecord:
         """Atomically reserve and index a session transcript without overwriting."""
         record = self.prepare_session(
@@ -180,6 +207,7 @@ class SessionManager:
             inference_provider=inference_provider,
             title=title,
             session_id=session_id,
+            role=role,
         )
         if self.get_session(record.id) is not None:
             raise RuntimeError(f"Session already exists with id '{record.id}'")
@@ -210,6 +238,7 @@ class SessionManager:
         inference_provider: str | None = None,
         title: str | None = None,
         session_id: str | None = None,
+        role: str | None = None,
     ) -> CodingSessionRecord:
         """Return metadata for a session without adding it to the resume index."""
         now = time()
@@ -232,6 +261,7 @@ class SessionManager:
             title=title,
             created_at=now,
             updated_at=now,
+            role=role,
         )
 
     def index_session(self, record: CodingSessionRecord) -> CodingSessionRecord:
@@ -291,6 +321,7 @@ class SessionManager:
             title=title if title is not None else existing.title,
             created_at=existing.created_at,
             updated_at=time(),
+            role=existing.role,
         )
         self._upsert(updated)
         return updated
