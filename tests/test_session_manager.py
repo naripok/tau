@@ -1,12 +1,18 @@
 import json
+import multiprocessing
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
 
 import pytest
 
 from tau_coding.paths import TauPaths
-from tau_coding.session_manager import CodingSessionRecord, SessionManager
+from tau_coding.session_manager import (
+    CodingSessionRecord,
+    SessionManager,
+)
 
 
 def test_session_manager_creates_and_lists_sessions(tmp_path: Path) -> None:
@@ -287,3 +293,76 @@ def test_session_manager_sorts_newest_updated_first(tmp_path: Path) -> None:
 
     assert [session.id for session in sessions] == ["older", "newer"]
     assert newer in sessions
+
+
+def test_session_manager_skips_corrupt_index_line_with_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A truncated index line degrades to a warning instead of failing startup."""
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    record = manager.create_session(cwd=cwd, model="fake")
+    index_path = manager.project_index_path(cwd)
+    truncated = record.to_model().model_dump_json()[:201]
+    index_path.write_text(
+        truncated + "\n" + index_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    assert manager.list_sessions(cwd) == [record]
+    assert "corrupt" in capsys.readouterr().err
+
+
+def test_session_manager_failed_index_write_keeps_previous_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write that dies before publishing leaves the previous index intact."""
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    record = manager.create_session(cwd=cwd, model="fake")
+    index_path = manager.project_index_path(cwd)
+
+    def failing_replace(src: object, dst: object) -> None:
+        raise RuntimeError("simulated crash before the index becomes visible")
+
+    monkeypatch.setattr("tau_coding.session_manager.os.replace", failing_replace)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        manager.index_session(replace(record, title="update", updated_at=record.updated_at + 1))
+
+    monkeypatch.undo()
+    assert manager.list_sessions(cwd) == [record]
+    assert not list(index_path.parent.glob(".*tmp*"))
+
+
+def _upsert_worker_records(home: str, cwd: str, worker: int, count: int) -> None:
+    manager = SessionManager(TauPaths(home=Path(home) / ".tau", agents_home=Path(home) / ".agents"))
+    for number in range(count):
+        manager.index_session(
+            manager.prepare_session(
+                cwd=Path(cwd), model="fake", session_id=f"worker-{worker}-{number}"
+            )
+        )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork start method is unavailable on Windows")
+def test_session_manager_preserves_concurrent_cross_process_upserts(tmp_path: Path) -> None:
+    """Records upserted by concurrent processes all survive in the index."""
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    context = multiprocessing.get_context("fork")
+    processes = [
+        context.Process(target=_upsert_worker_records, args=(str(tmp_path), str(cwd), worker, 8))
+        for worker in range(6)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=60)
+
+    assert all(process.exitcode == 0 for process in processes)
+
+    listed_ids = {record.id for record in manager.list_sessions()}
+    expected_ids = {f"worker-{worker}-{number}" for worker in range(6) for number in range(8)}
+    assert listed_ids == expected_ids

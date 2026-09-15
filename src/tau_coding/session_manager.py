@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import re
+import sys
+import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
+from tau_coding.file_locks import exclusive_file_lock
 from tau_coding.paths import TauPaths
 
 _MAX_SESSION_ID_BYTES = 128
@@ -302,7 +306,16 @@ class SessionManager:
             stripped = line.strip()
             if not stripped:
                 continue
-            model = SessionRecordModel.model_validate_json(stripped)
+            try:
+                model = SessionRecordModel.model_validate_json(stripped)
+            except ValidationError as error:
+                # One truncated line (for example from a process killed
+                # mid-write by an older Tau) must not brick every startup.
+                print(
+                    f"tau: ignoring corrupt session index line in {path}: {error}",
+                    file=sys.stderr,
+                )
+                continue
             records.append(CodingSessionRecord.from_model(model))
         return records
 
@@ -325,18 +338,44 @@ class SessionManager:
         content = "\n".join(record.to_model().model_dump_json() for record in records)
         if content:
             content += "\n"
-        path.write_text(content, encoding="utf-8")
+        _atomic_write_text(path, content)
 
     def _upsert(self, record: CodingSessionRecord) -> None:
         path = self.project_index_path(record.cwd)
-        records = [item for item in self._read_index(path) if item.id != record.id]
-        records.append(record)
-        self._write_index(path, records)
+        with exclusive_file_lock(path):
+            records = [item for item in self._read_index(path) if item.id != record.id]
+            records.append(record)
+            self._write_index(path, records)
 
     def _remove(self, record: CodingSessionRecord) -> None:
         path = self.project_index_path(record.cwd)
-        records = [item for item in self._read_index(path) if item.id != record.id]
-        self._write_index(path, records)
+        with exclusive_file_lock(path):
+            records = [item for item in self._read_index(path) if item.id != record.id]
+            self._write_index(path, records)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace ``path`` with ``content`` in one atomic step.
+
+    A plain ``write_text`` truncates the target first, so a concurrent reader
+    or a process killed mid-write observes a partial file. Writing a hidden
+    temporary sibling and renaming it over the target makes the new content
+    visible all at once or not at all. The temp name starts with a dot and
+    never matches the ``index.jsonl`` globs used to discover indexes.
+    """
+    descriptor, temp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        with suppress(OSError):
+            Path(temp_name).unlink(missing_ok=True)
+        raise
 
 
 def _deduplicate_records(records: list[CodingSessionRecord]) -> list[CodingSessionRecord]:
