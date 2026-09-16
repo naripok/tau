@@ -354,6 +354,35 @@ def test_session_manager_skips_corrupt_index_line_with_warning(
     assert "corrupt" in capsys.readouterr().err
 
 
+def test_session_manager_skips_index_deleted_after_exists_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An index vanishing between the existence check and the read is skipped.
+
+    Parent sessions and subagent children share the sessions home, so the glob
+    can discover a project index that is deleted (sandbox refresh, reset)
+    before ``_read_index`` opens it. Listings and lookups must degrade instead
+    of crashing with FileNotFoundError.
+    """
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    record = manager.create_session(cwd=cwd, model="fake")
+    index_path = manager.project_index_path(cwd)
+
+    original_read_text = Path.read_text
+
+    def vanishing_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        if path == index_path:
+            path.unlink()
+        return original_read_text(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", vanishing_read_text)
+
+    assert manager.list_sessions() == []
+    assert manager.get_session(record.id) is None
+
+
 def test_session_manager_failed_index_write_keeps_previous_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

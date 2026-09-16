@@ -330,10 +330,20 @@ class SessionManager:
         if not path.exists():
             return []
 
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # The index can vanish between the existence check above and the
+            # read here: concurrent processes (parent session, subagent
+            # children) and environment refreshes may remove it at any moment.
+            # Treat the disappeared index as empty instead of failing every
+            # listing and lookup.
+            return []
+
         records: list[CodingSessionRecord] = []
         # Split on newlines only: str.splitlines() would also split on characters
         # like U+2028 that appear unescaped inside JSON string values.
-        for line in path.read_text(encoding="utf-8").split("\n"):
+        for line in text.split("\n"):
             stripped = line.strip()
             if not stripped:
                 continue
