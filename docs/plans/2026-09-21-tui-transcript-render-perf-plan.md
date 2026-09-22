@@ -200,12 +200,12 @@ in isolation before you investigate the change.
 
 **Check:** `uv run pytest tests/test_tui_transcript_diff.py tests/test_tui_streaming.py tests/test_tui_app.py -q && uv run pytest -q && uv run ruff check . && uv run ruff format --check .` — expected: all pass
 
-- [ ] Adjust the existing test's sleeps per the contract above, run it, and check that it passes
-- [ ] Extend the streaming code-block test's wait per the contract above, run it, and check that it passes
-- [ ] Write the failing tests for the behaviors above. Run them and check that each fails for the expected reason. One exception: `test_parser_constructed_once_per_widget` monkeypatches `MarkdownIt` in the widgets module, an attribute that exists only after the module-top import is added, so the pre-implementation run must use `monkeypatch.setattr(..., raising=False)` (or write the test after the import) and then fails or passes on the construction count
-- [ ] Implement the interface and behavior
-- [ ] Run verification (full suite, lint, format check)
-- [ ] Commit: `git add src/tau_coding/tui/widgets.py tests/test_tui_streaming.py tests/test_tui_app.py tests/test_tui_transcript_diff.py && git commit -m "feat: slow stream flush cadence to 50ms and cache the markdown parser"`
+- [x] Adjust the existing test's sleeps per the contract above, run it, and check that it passes
+- [x] Extend the streaming code-block test's wait per the contract above, run it, and check that it passes
+- [x] Write the failing tests for the behaviors above. Run them and check that each fails for the expected reason. One exception: `test_parser_constructed_once_per_widget` monkeypatches `MarkdownIt` in the widgets module, an attribute that exists only after the module-top import is added, so the pre-implementation run must use `monkeypatch.setattr(..., raising=False)` (or write the test after the import) and then fails or passes on the construction count
+- [x] Implement the interface and behavior
+- [x] Run verification (full suite, lint, format check)
+- [x] Commit: `git add src/tau_coding/tui/widgets.py tests/test_tui_streaming.py tests/test_tui_app.py tests/test_tui_transcript_diff.py && git commit -m "feat: slow stream flush cadence to 50ms and cache the markdown parser"`
 
 ---
 
