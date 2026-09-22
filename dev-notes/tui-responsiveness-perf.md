@@ -80,12 +80,13 @@ which is fine for completion and still reflects new files quickly.
 Every provider delta previously hit Textual's `MarkdownStream` immediately,
 so high-frequency chunks competed with keyboard input. `append_fragment`
 still updates canonical state (`item.text`, `selection_text`) instantly, but
-the presentation write is buffered and flushed at ~20 ms cadence — at most
-one scheduled flush task per widget, and never one per token. Pending text is
-flushed before `finalize`, `replace_text`, `_stop_stream`, thinking/assistant
-boundaries, and session switches; unmount cancels the scheduled flush and
-stops the stream without leaking tasks. Every character is preserved; only
-the repaint rate is decoupled from the delta rate.
+the presentation write stays buffered and flushes at the fixed 0.05 s cadence
+documented in `dev-notes/tui-transcript-redraw-perf.md`. At most one scheduled
+flush task runs per widget, and the schedule never runs one flush per token.
+Pending text is flushed before `finalize`, `replace_text`, `_stop_stream`,
+thinking/assistant boundaries, and session switches; unmount cancels the
+scheduled flush and stops the stream without leaking tasks. Every character
+is preserved; only the repaint rate is decoupled from the delta rate.
 
 ### 5. Slash commands request a targeted refresh scope
 
