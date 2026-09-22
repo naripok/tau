@@ -156,10 +156,10 @@ If it fails, re-run it in isolation before you investigate the change.
 
 **Check:** `uv run pytest tests/test_tui_transcript_diff.py -q && uv run pytest -q && uv run ruff check . && uv run ruff format --check .` — expected: all pass (the full-suite command takes about 95 s)
 
-- [ ] Write the failing tests for the behaviors above. Run them and check that each fails for the expected reason
-- [ ] Implement the interface and behavior
-- [ ] Run verification (full suite, lint, format check)
-- [ ] Commit: `git add src/tau_coding/tui/widgets.py tests/test_tui_transcript_diff.py && git commit -m "feat: diff-based transcript redraw on the display-state refresh route"`
+- [x] Write the failing tests for the behaviors above. Run them and check that each fails for the expected reason
+- [x] Implement the interface and behavior
+- [x] Run verification (full suite, lint, format check)
+- [x] Commit: `git add src/tau_coding/tui/widgets.py tests/test_tui_transcript_diff.py && git commit -m "feat: diff-based transcript redraw on the display-state refresh route"`
 
 ---
 
