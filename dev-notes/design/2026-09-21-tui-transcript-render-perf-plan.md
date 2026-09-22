@@ -76,10 +76,10 @@ If it fails, re-run it in isolation before you investigate the change.
 
 **Check:** `uv run pytest tests/test_tui_transcript_diff.py -q && uv run pytest tests/test_tui_streaming.py tests/test_tui_components.py -q && uv run pytest -q && uv run ruff check . && uv run ruff format --check .` — expected: all pass (the full suite also runs because the sentinel swap touches all four placeholder construction sites, exercised by `tests/test_tui_app.py`)
 
-- [ ] Write the failing tests for the behaviors above. Run them and check that each fails for the expected reason. One exception: `test_boundary_has_no_fingerprint` is written to pass both before and after the change (it guards scope, not behavior), so the fail-first check applies to every other test
-- [ ] Implement the interface and behavior
-- [ ] Run verification (tests, lint, format check)
-- [ ] Commit: `git add src/tau_coding/tui/widgets.py tests/test_tui_transcript_diff.py && git commit -m "feat: add render fingerprints and shared placeholder sentinel to transcript widgets"`
+- [x] Write the failing tests for the behaviors above. Run them and check that each fails for the expected reason. One exception: `test_boundary_has_no_fingerprint` is written to pass both before and after the change (it guards scope, not behavior), so the fail-first check applies to every other test
+- [x] Implement the interface and behavior
+- [x] Run verification (tests, lint, format check)
+- [x] Commit: `git add src/tau_coding/tui/widgets.py tests/test_tui_transcript_diff.py && git commit -m "feat: add render fingerprints and shared placeholder sentinel to transcript widgets"`
 
 ---
 
