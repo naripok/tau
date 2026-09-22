@@ -1229,8 +1229,6 @@ class TranscriptView(VerticalScroll):
         only after the replacement rows are mounted.
         """
         state = self._render_state
-        if state is None:
-            return
         theme = self._render_theme
         total = len(state.items)
         if scroll_end:
