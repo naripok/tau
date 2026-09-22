@@ -238,7 +238,7 @@ in isolation before you investigate the change.
 
 **Check:** `uv run python scripts/bench_transcript.py && uv run pytest -q && uv run ruff check . && uv run ruff format --check .` — expected: five benchmark rows printed, all tests pass, lint and format clean
 
-- [ ] Write the benchmark script, run it on the completed implementation, and check that it prints five rows
-- [ ] Write the new dev-note with the before/after table
-- [ ] Apply the one-line cadence correction to `dev-notes/tui-responsiveness-perf.md`
-- [ ] Commit: `git add scripts/bench_transcript.py dev-notes/tui-transcript-redraw-perf.md dev-notes/tui-responsiveness-perf.md && git commit -m "docs: add transcript render benchmark and before/after perf notes"`
+- [x] Write the benchmark script, run it on the completed implementation, and check that it prints five rows
+- [x] Write the new dev-note with the before/after table
+- [x] Apply the one-line cadence correction to `dev-notes/tui-responsiveness-perf.md`
+- [x] Commit: `git add scripts/bench_transcript.py dev-notes/tui-transcript-redraw-perf.md dev-notes/tui-responsiveness-perf.md && git commit -m "docs: add transcript render benchmark and before/after perf notes"`
