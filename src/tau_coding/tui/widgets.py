@@ -12,6 +12,7 @@ from pathlib import Path
 from subprocess import TimeoutExpired, run
 from typing import Any, ClassVar, Literal, NamedTuple, Protocol
 
+from markdown_it import MarkdownIt
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 from rich.align import Align
@@ -342,7 +343,18 @@ class ThemedMarkdownWidget(TextualMarkdown):
         classes: str | None = None,
     ) -> None:
         self.tau_link_style = theme.markdown_link
-        super().__init__(markdown, classes=classes)
+        # Textual calls the factory on every append/update/parse, so the
+        # closure memoizes one parser per widget: the first parse pays the
+        # construction cost and every later parse reuses the instance.
+        parser: MarkdownIt | None = None
+
+        def parser_factory() -> MarkdownIt:
+            nonlocal parser
+            if parser is None:
+                parser = MarkdownIt("gfm-like")
+            return parser
+
+        super().__init__(markdown, classes=classes, parser_factory=parser_factory)
 
 
 # Roles rendered as free-flowing text with no left accent or role background,
@@ -657,7 +669,7 @@ class TranscriptMessageWidget(Horizontal):
         return True
 
 
-_STREAM_FLUSH_INTERVAL = 0.02
+_STREAM_FLUSH_INTERVAL = 0.05
 """Minimum delay in seconds before a batch of streamed fragments is rendered.
 
 Keeps the Markdown re-parse/repaint rate independent of the provider's

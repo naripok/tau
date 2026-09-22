@@ -163,18 +163,17 @@ async def test_replace_text_flushes_pending_before_replacing(
 
 
 @pytest.mark.anyio
-async def test_fragments_across_flush_windows_produce_ordered_writes() -> None:
+async def test_fragments_across_flush_windows_produce_ordered_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Fragments spanning real flush-window boundaries yield ordered batches.
 
-    Proves the batch cadence is real rather than deferred forever: with the
-    actual flush window, fragments grouped by sleeps longer than the window
-    produce several writes whose concatenation still equals the canonical text.
+    Proves the batch cadence is real rather than deferred forever: with a
+    monkeypatched flush window, fragments grouped by sleeps longer than that
+    window produce several writes whose concatenation still equals the
+    canonical text, so the test keeps its meaning at any constant value.
     """
-    widget = StreamingTranscriptMessageWidget(
-        ChatItem(role="assistant", text=""), theme=TAU_DARK_THEME
-    )
-    fake = FakeMarkdownStream()
-    widget._stream = fake
+    widget, fake = _streaming_widget_with_fake_stream(monkeypatch, flush_interval=0.01)
 
     for group in ("alpha", "beta", "gamma"):
         for character in group:

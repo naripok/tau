@@ -3456,7 +3456,7 @@ async def test_streaming_code_block_hides_horizontal_scrollbar_until_finalized()
         transcript = app.query_one("#transcript", TranscriptView)
 
         await transcript.append_assistant_delta("```python\n" + long_code_line)
-        await pilot.pause()
+        await pilot.pause(0.2)
 
         streaming_fence = app.query_one("MarkdownFence")
         assert streaming_fence.max_scroll_x > 0

@@ -12,12 +12,14 @@ state, touches only changed rows on small changes, and keeps the streaming,
 boundary, and full-rebuild behavior of the baseline pipeline.
 """
 
+import asyncio
 import contextlib
 import time
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from markdown_it import MarkdownIt
 from textual.widget import Widget
 
 from tau_agent import (
@@ -42,6 +44,7 @@ from tau_coding.tui.widgets import (
     _HIDDEN_THINKING_PLACEHOLDER_ITEM,
     TRANSCRIPT_WINDOW_ITEMS,
     StreamingTranscriptMessageWidget,
+    ThemedMarkdownWidget,
     TranscriptMessageWidget,
     TranscriptView,
     TranscriptWindowBoundary,
@@ -1706,3 +1709,108 @@ async def test_terminal_error_boundary_renders_once() -> None:
         error_rows = [row for row in _message_rows(transcript) if row.item.role == "error"]
         assert len(error_rows) == 1
         assert "provider failed" in error_rows[0].selection_text
+
+
+# ---------------------------------------------------------------------------
+# Fixed flush cadence and per-widget markdown parser (Task 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_flush_interval_is_0_05_and_monkeypatchable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flush constant is 0.05 s and the flush schedule honors a replacement.
+
+    Proves the staleness bound is the named constant itself: the shipped value
+    is 0.05 s, and with a replaced smaller value, fragments grouped by sleeps
+    longer than the replacement flush per group, in order, with nothing
+    dropped.
+    """
+    assert tui_widgets._STREAM_FLUSH_INTERVAL == 0.05
+
+    monkeypatch.setattr(tui_widgets, "_STREAM_FLUSH_INTERVAL", 0.01)
+    fake = _FakeMarkdownStream()
+    widget = _DoubleStreamWidget(
+        ChatItem(role="assistant", text=""),
+        theme=TAU_DARK_THEME,
+        stream=fake,
+    )
+    for group in ("alpha", "beta"):
+        for character in group:
+            await widget.append_fragment(character)
+        # A sleep longer than the replaced interval lets each group's flush fire.
+        await asyncio.sleep(0.03)
+
+    assert fake.writes == ["alpha", "beta"]
+
+
+@pytest.mark.anyio
+async def test_parser_constructed_once_per_widget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each markdown widget constructs exactly one parser in its lifetime.
+
+    Textual invokes the parser factory on every parse call (the mount update,
+    a full document update, and every streamed append), so the invocation
+    count tracks every parse call while a per-widget memoized factory keeps
+    the construction count at one per widget, and each widget builds its own
+    parser.
+    """
+    constructions: list[MarkdownIt] = []
+
+    class CountingMarkdownIt(MarkdownIt):
+        """MarkdownIt double that records each construction."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            constructions.append(self)
+
+    # raising=False: before the parser-factory change the widgets module has
+    # no MarkdownIt name to patch, and the construction-count assertion below
+    # carries the failure instead.
+    monkeypatch.setattr(tui_widgets, "MarkdownIt", CountingMarkdownIt, raising=False)
+
+    def build_counting_widget(
+        markdown: str | None,
+    ) -> tuple[ThemedMarkdownWidget, list[int]]:
+        """Build a widget whose stored parser factory records each invocation."""
+        widget = ThemedMarkdownWidget(markdown, theme=TAU_DARK_THEME)
+        factory_calls: list[int] = []
+        original_factory = widget._parser_factory
+        # Before the parser-factory change the widget stores None and Textual
+        # builds parsers internally, so the wrap below never installs and the
+        # construction-count assertion carries the failure.
+        if original_factory is not None:
+
+            def counting_factory() -> MarkdownIt:
+                factory_calls.append(1)
+                return original_factory()
+
+            widget._parser_factory = counting_factory
+        return widget, factory_calls
+
+    app = TauTuiApp(FakeSession())
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        widget, factory_calls = build_counting_widget("# Heading\n")
+        await app.mount(widget)
+        await widget.update("## Replaced\n")
+        for index in range(3):
+            await widget.append(f" fragment {index}\n")
+        await pilot.pause()
+
+        # One parser covers mount, the document update, and the appends.
+        assert len(constructions) == 1
+        # The factory ran on every parse call: mount, update, three appends.
+        assert len(factory_calls) == 5
+
+        second_widget, second_calls = build_counting_widget("Second\n")
+        await app.mount(second_widget)
+        await pilot.pause()
+
+        # The second widget performs its own separate construction.
+        assert len(second_calls) == 1
+        assert len(constructions) == 2
+        assert constructions[0] is not constructions[1]
