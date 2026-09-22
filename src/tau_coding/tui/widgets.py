@@ -264,7 +264,7 @@ class TauMarkdownBlock(MarkdownBlock):
     def allow_select(self) -> bool:
         """Only allow native selection once Textual has mounted the block.
 
-        Textual may hit freshly-created Markdown blocks during a mouse-down before
+        Textual can hit freshly-created Markdown blocks during a mouse-down before
         they have a parent. Its selection startup path assumes selected content
         widgets have a parent container, so an unmounted selectable Markdown block
         can crash with ``container is None``.
@@ -587,8 +587,8 @@ class TranscriptMessageWidget(Horizontal):
         changes the fingerprint. ``_markdown_text`` only enters the fingerprint
         for markdown-body rows: plain-body and custom rows never render it,
         and the plain-body in-place update path can leave the cached text
-        stale relative to the newly stored flags, so including it there would
-        make the fingerprint depend on state other than the render inputs.
+        stale relative to the newly stored flags, so including it there makes
+        the fingerprint depend on state other than the render inputs.
         """
         return _message_render_fingerprint(
             self.item,
@@ -845,7 +845,7 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
             return
         self._stream = None
         with contextlib.suppress(Exception):
-            # The stream drains into a widget that may already be detached, and
+            # The stream drains into a widget that can already be detached, and
             # item.text remains the authoritative full text, so drop it safely.
             await stream.stop()
 
@@ -925,7 +925,7 @@ class TranscriptView(VerticalScroll):
 
     @property
     def _should_follow_output(self) -> bool:
-        """Return whether new content should keep the viewport pinned to the bottom."""
+        """Return whether new content keeps the viewport pinned to the bottom."""
         return self._follow_output or self.is_vertical_scroll_end
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
@@ -1753,7 +1753,7 @@ class TranscriptView(VerticalScroll):
         but only tool, skill, branch-summary, and compaction-summary rows render
         it. Rows outside that set keep their widget objects and their rendered
         content, so their stored flag is refreshed to the value a full rebuild
-        would pass; without this the next diff redraw would remount them. The
+        passes. Without the refresh, the next diff redraw remounts them. The
         stored fingerprint still catches a real content change: a custom row
         whose resolved markup differs under the new flag keeps a mismatching
         fingerprint and is remounted by the diff redraw.

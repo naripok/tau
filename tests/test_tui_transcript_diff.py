@@ -188,8 +188,8 @@ def test_fingerprint_pure_across_unchanged_render_early_return() -> None:
     """The early-return update path keeps the fingerprint a pure input function.
 
     The unchanged-render early return stores a new ``show_tool_results`` flag
-    without recomputing the cached markdown text, so the fingerprint may only
-    include markdown text for markdown-body rows. A plain-body tool row that
+    without recomputing the cached markdown text, so the fingerprint includes
+    markdown text only for markdown-body rows. A plain-body tool row that
     early-returns must therefore produce the same fingerprint as a freshly
     constructed widget with the same current inputs.
     """
@@ -315,7 +315,7 @@ def _frozen_monotonic(clock: dict[str, float]) -> Iterator[None]:
     ``tau_coding.tui.state`` shares the stdlib ``time`` module, so patching its
     ``monotonic`` is a global patch. Scoped to the synchronous refresh call it
     advances only the tool-row elapsed suffix; left installed across an
-    ``await`` it would freeze the event loop's own clock and hang the test.
+    ``await`` it freezes the event loop's own clock and hangs the test.
     """
     real_monotonic = time.monotonic
 
@@ -908,9 +908,9 @@ async def test_boundary_removed_when_window_extends_to_latest(
         assert bottom_boundary is not None
 
         transcript.follow_output()
-        # No pause before the counted refresh: the follow scroll would cross
-        # the bottom edge and schedule the baseline window shift, whose full
-        # rebuild would extend the window before the diff render runs.
+        # No pause before the counted refresh: the follow scroll crosses
+        # the bottom edge and schedules the baseline window shift, whose full
+        # rebuild extends the window before the diff render runs.
         with _counted_row_changes(transcript) as (mounted, removed):
             transcript.update_from_state(state, theme=TAU_DARK_THEME)
         await pilot.pause()
