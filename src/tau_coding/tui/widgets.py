@@ -349,6 +349,13 @@ class ThemedMarkdownWidget(TextualMarkdown):
 # matching how they appear while streaming.
 _BORDERLESS_TRANSCRIPT_ROLES = frozenset({"assistant", "thinking"})
 _HIDDEN_THINKING_PLACEHOLDER = "Thinking… Press Ctrl+T to show thinking tokens."
+# Shared read-only placeholder item, never mutated: every hidden-thinking
+# placeholder row references this one item by identity so a placeholder row's
+# render inputs, and therefore its fingerprint, are stable across redraws.
+_HIDDEN_THINKING_PLACEHOLDER_ITEM = ChatItem(
+    role="thinking",
+    text=_HIDDEN_THINKING_PLACEHOLDER,
+)
 TRANSCRIPT_WINDOW_ITEMS = 200
 TRANSCRIPT_WINDOW_PAGE_ITEMS = 80
 TRANSCRIPT_WINDOW_OVERSCAN_ITEMS = 40
@@ -384,6 +391,9 @@ class TranscriptWindowBoundary(Static):
 
 class TranscriptMessageWidget(Horizontal):
     """One selectable transcript message rendered as a full-height role block."""
+
+    render_fingerprint: tuple[object, ...]
+    """Fingerprint over the row's render inputs plus its derived render content."""
 
     DEFAULT_CSS = """
     TranscriptMessageWidget {
@@ -432,6 +442,7 @@ class TranscriptMessageWidget(Horizontal):
             invocation=self._invocation,
         )
         self._theme = theme
+        self.render_fingerprint = self._compute_render_fingerprint()
         self._role_style = _chat_item_role_style(item, theme)
         self._plain_render_key = (
             self.selection_text,
@@ -504,6 +515,34 @@ class TranscriptMessageWidget(Horizontal):
             return None
         return selected_text, "\n"
 
+    def _compute_render_fingerprint(self) -> tuple[object, ...]:
+        """Return the fingerprint over this row's stored render inputs.
+
+        Includes the derived ``selection_text`` so member-derived content the
+        item's own fields miss (a batch member's update text or result) still
+        changes the fingerprint. ``_markdown_text`` only enters the fingerprint
+        for markdown-body rows: plain-body and custom rows never render it,
+        and the plain-body in-place update path can leave the cached text
+        stale relative to the newly stored flags, so including it there would
+        make the fingerprint depend on state other than the render inputs.
+        """
+        item = self.item
+        return (
+            self._theme.name,
+            item.role,
+            item.text,
+            item.tool_result_text,
+            item.update_text,
+            item.highlight,
+            self._show_tool_results,
+            self._invocation,
+            self._result_markup,
+            self._custom_markup,
+            item.plain_text,
+            self.selection_text,
+            self._markdown_text if _use_markdown_transcript_body(item) else None,
+        )
+
     def refresh_invocation(
         self,
         *,
@@ -535,6 +574,7 @@ class TranscriptMessageWidget(Horizontal):
             self._result_markup,
         )
         if next_render_key == self._plain_render_key:
+            self.render_fingerprint = self._compute_render_fingerprint()
             return True
         self._plain_render_key = next_render_key
         self.selection_text = next_selection_text
@@ -550,6 +590,7 @@ class TranscriptMessageWidget(Horizontal):
             show_tool_results=show_tool_results,
             invocation=self._invocation,
         )
+        self.render_fingerprint = self._compute_render_fingerprint()
         try:
             body = self.query_one(".transcript-plain-body", Static)
         except NoMatches:
@@ -583,6 +624,9 @@ per-token delta rate while bounding how stale the visible stream can be.
 class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
     """One assistant or thinking Markdown block that accepts streamed fragments."""
 
+    render_fingerprint: tuple[object, ...]
+    """Fingerprint over the row's render inputs: theme name, role, and item text."""
+
     DEFAULT_CSS = """
     StreamingTranscriptMessageWidget {
         width: 1fr;
@@ -610,6 +654,9 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         if item.role not in {"assistant", "thinking"}:
             raise ValueError("Streaming transcript widgets only support assistant/thinking items")
         self.item = item
+        # Not `_theme`: the Textual Markdown base stores a theme-name string there.
+        self._tau_theme = theme
+        self.refresh_render_fingerprint()
         self.selection_text = item.text
         self._stream: MarkdownStream | None = None
         self._is_streaming = True
@@ -623,6 +670,10 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         foreground, _ = _split_rich_style_colors(_chat_item_role_style(item, theme).body)
         if foreground:
             self.styles.color = foreground
+
+    def refresh_render_fingerprint(self) -> None:
+        """Recompute the render fingerprint from the current theme, role, and item text."""
+        self.render_fingerprint = (self._tau_theme.name, self.item.role, self.item.text)
 
     @property
     def stream(self) -> MarkdownStream:
@@ -715,6 +766,7 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         self._is_streaming = False
         self.remove_class("-streaming")
         self.add_class("-finalized")
+        self.refresh_render_fingerprint()
 
     async def on_unmount(self) -> None:
         """Cancel any scheduled flush and stop the stream if removed mid-stream.
@@ -973,7 +1025,7 @@ class TranscriptView(VerticalScroll):
                     )
                 elif not hidden_run:
                     placeholder = TranscriptMessageWidget(
-                        ChatItem(role="thinking", text=_HIDDEN_THINKING_PLACEHOLDER),
+                        _HIDDEN_THINKING_PLACEHOLDER_ITEM,
                         theme=theme,
                         show_tool_results=state.show_tool_results,
                     )
@@ -1052,7 +1104,7 @@ class TranscriptView(VerticalScroll):
             if item.role == "thinking" and not state.show_thinking:
                 if hidden_thinking_widget is None:
                     hidden_thinking_widget = TranscriptMessageWidget(
-                        ChatItem(role="thinking", text=_HIDDEN_THINKING_PLACEHOLDER),
+                        _HIDDEN_THINKING_PLACEHOLDER_ITEM,
                         theme=theme,
                         show_tool_results=state.show_tool_results,
                     )
@@ -1290,10 +1342,7 @@ class TranscriptView(VerticalScroll):
             if self._hidden_thinking_placeholder_visible:
                 return
             widget = TranscriptMessageWidget(
-                ChatItem(
-                    role="thinking",
-                    text=_HIDDEN_THINKING_PLACEHOLDER,
-                ),
+                _HIDDEN_THINKING_PLACEHOLDER_ITEM,
                 theme=theme,
                 show_tool_results=False,
             )
@@ -1341,6 +1390,7 @@ class TranscriptView(VerticalScroll):
         await widget.finalize(text)
         if item is not None:
             widget.item = item
+            widget.refresh_render_fingerprint()
             self._item_widgets[id(item)] = widget
         self._active_assistant_widget = None
         self._active_message_widgets = [
@@ -1407,7 +1457,7 @@ class TranscriptView(VerticalScroll):
             if item.role == "thinking" and not show_thinking:
                 if hidden_widget is None:
                     hidden_widget = TranscriptMessageWidget(
-                        ChatItem(role="thinking", text=_HIDDEN_THINKING_PLACEHOLDER),
+                        _HIDDEN_THINKING_PLACEHOLDER_ITEM,
                         theme=theme,
                         show_tool_results=False,
                     )
@@ -1558,6 +1608,11 @@ def _use_plain_transcript_body(item: ChatItem) -> bool:
         or item.highlight == "alert"
         or item.role in {"user", "tool", "skill", "error"}
     )
+
+
+def _use_markdown_transcript_body(item: ChatItem) -> bool:
+    """Return whether a transcript item renders the cached Markdown body text."""
+    return item.role != "custom" and not _use_plain_transcript_body(item)
 
 
 def _transcript_plain_body_text(
