@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import TimeoutExpired, run
-from typing import Any, ClassVar, Literal, Protocol
+from typing import Any, ClassVar, Literal, NamedTuple, Protocol
 
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
@@ -361,6 +361,56 @@ TRANSCRIPT_WINDOW_PAGE_ITEMS = 80
 TRANSCRIPT_WINDOW_OVERSCAN_ITEMS = 40
 
 
+def _message_render_fingerprint(
+    item: ChatItem,
+    *,
+    theme: TuiTheme,
+    show_tool_results: bool,
+    custom_markup: str | None = None,
+    invocation: str | None = None,
+    result_markup: str | None = None,
+) -> tuple[object, ...]:
+    """Return a message row's fingerprint for one item's render inputs.
+
+    The diff redraw compares a mounted row's fingerprint against this formula
+    applied to the item's current render inputs, so it must stay the exact
+    formula the row stores at construction (see
+    ``TranscriptMessageWidget._compute_render_fingerprint``).
+    """
+    # Mirror the constructor's stored fields: only custom rows keep custom
+    # markup and only tool rows keep invocation and result markup.
+    custom_markup = custom_markup if item.role == "custom" else None
+    invocation = invocation if item.role == "tool" else None
+    result_markup = result_markup if item.role == "tool" else None
+    selection_text = transcript_item_selection_text(
+        item,
+        show_tool_results=show_tool_results,
+        custom_markup=custom_markup,
+        invocation=invocation,
+        result_markup=result_markup,
+    )
+    markdown_text = _transcript_item_markdown(
+        item,
+        show_tool_results=show_tool_results,
+        invocation=invocation,
+    )
+    return (
+        theme.name,
+        item.role,
+        item.text,
+        item.tool_result_text,
+        item.update_text,
+        item.highlight,
+        show_tool_results,
+        invocation,
+        result_markup,
+        custom_markup,
+        item.plain_text,
+        selection_text,
+        markdown_text if _use_markdown_transcript_body(item) else None,
+    )
+
+
 class TranscriptWindowBoundary(Static):
     """Small paging sentinel shown when transcript items are outside the DOM window."""
 
@@ -377,10 +427,12 @@ class TranscriptWindowBoundary(Static):
 
     def __init__(self, direction: Literal["earlier", "later"], count: int) -> None:
         self.direction = direction
+        self.count = count
         super().__init__(self._label(count), classes=f"transcript-window-{direction}")
 
     def update_count(self, count: int) -> None:
         """Update the hidden-item count without scheduling a layout pass."""
+        self.count = count
         self.update(self._label(count), layout=False)
 
     def _label(self, count: int) -> str:
@@ -526,21 +578,13 @@ class TranscriptMessageWidget(Horizontal):
         stale relative to the newly stored flags, so including it there would
         make the fingerprint depend on state other than the render inputs.
         """
-        item = self.item
-        return (
-            self._theme.name,
-            item.role,
-            item.text,
-            item.tool_result_text,
-            item.update_text,
-            item.highlight,
-            self._show_tool_results,
-            self._invocation,
-            self._result_markup,
-            self._custom_markup,
-            item.plain_text,
-            self.selection_text,
-            self._markdown_text if _use_markdown_transcript_body(item) else None,
+        return _message_render_fingerprint(
+            self.item,
+            theme=self._theme,
+            show_tool_results=self._show_tool_results,
+            custom_markup=self._custom_markup,
+            invocation=self._invocation,
+            result_markup=self._result_markup,
         )
 
     def refresh_invocation(
@@ -801,6 +845,20 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         return selected_text, "\n"
 
 
+class _DesiredRow(NamedTuple):
+    """One desired window row of a diff render.
+
+    ``item`` is the display item the row renders: a state item, the shared
+    sentinel item for a hidden-thinking placeholder entry, or a synthetic
+    buffer-backed item for the assistant entry. ``run_items`` is non-empty
+    only for a placeholder entry, which represents every item of its run.
+    """
+
+    item: ChatItem
+    widget: TranscriptMessageWidget | StreamingTranscriptMessageWidget
+    run_items: tuple[ChatItem, ...] = ()
+
+
 class TranscriptView(VerticalScroll):
     """Scrollable transcript view backed by individual selectable message widgets."""
 
@@ -953,21 +1011,30 @@ class TranscriptView(VerticalScroll):
         *,
         theme: TuiTheme = TAU_DARK_THEME,
     ) -> None:
-        """Render display state while keeping the mounted transcript DOM bounded."""
+        """Render display state while keeping the mounted transcript DOM bounded.
+
+        A refresh over the same state object with retained rows and an unchanged
+        theme takes the diff redraw; a new state object, a lost row projection,
+        or a theme change takes the batched full rebuild.
+        """
         same_state = self._render_state is state
         retained_projection = same_state and any(
             id(item) in self._item_widgets for item in state.items
         )
+        theme_changed = self._render_theme.name != theme.name
         should_follow = self._should_follow_output
         if not retained_projection:
             self._follow_output = True
             should_follow = True
         self._render_state = state
         self._render_theme = theme
-        self._redraw(
-            scroll_end=should_follow,
-            preserve_window=retained_projection and not should_follow,
-        )
+        if not same_state or not retained_projection or theme_changed:
+            self._redraw(
+                scroll_end=should_follow,
+                preserve_window=retained_projection and not should_follow,
+            )
+        else:
+            self._diff_redraw(scroll_end=should_follow)
 
     def update_thinking_visibility(
         self,
@@ -1061,7 +1128,7 @@ class TranscriptView(VerticalScroll):
 
     def _redraw(self, *, scroll_end: bool, preserve_window: bool = False) -> None:
         state = self._render_state
-        if state is None:
+        if state is None or not self.is_mounted:
             return
         theme = self._render_theme
         total = len(state.items)
@@ -1069,84 +1136,511 @@ class TranscriptView(VerticalScroll):
             self._window_end = total
             self._window_start = max(0, total - TRANSCRIPT_WINDOW_ITEMS)
         else:
-            self._window_start = min(self._window_start, total)
-            self._window_end = min(max(self._window_end, self._window_start), total)
-            if self._window_end - self._window_start > TRANSCRIPT_WINDOW_ITEMS:
-                self._window_start = self._window_end - TRANSCRIPT_WINDOW_ITEMS
+            self._clamp_window_bounds(total)
 
-        removable = [
-            child
-            for child in self.children
-            if isinstance(
-                child,
-                TranscriptMessageWidget
-                | StreamingTranscriptMessageWidget
-                | TranscriptWindowBoundary,
+        with self.app.batch_update():
+            removable = [
+                child
+                for child in self.children
+                if isinstance(
+                    child,
+                    TranscriptMessageWidget
+                    | StreamingTranscriptMessageWidget
+                    | TranscriptWindowBoundary,
+                )
+            ]
+            if removable:
+                self.remove_children(removable)
+            self._active_assistant_widget = None
+            self._active_thinking_widget = None
+            self._active_message_widgets = []
+            self._hidden_thinking_placeholder_visible = False
+            self._item_widgets.clear()
+            self._top_boundary = None
+            self._bottom_boundary = None
+
+            widgets: list[Widget] = []
+            if self._window_start > 0:
+                self._top_boundary = TranscriptWindowBoundary("earlier", self._window_start)
+                widgets.append(self._top_boundary)
+
+            hidden_thinking_widget: TranscriptMessageWidget | None = None
+            for item in state.items[self._window_start : self._window_end]:
+                if item.role == "thinking" and not state.show_thinking:
+                    if hidden_thinking_widget is None:
+                        hidden_thinking_widget = self._build_placeholder_widget(
+                            theme=theme,
+                            show_tool_results=state.show_tool_results,
+                        )
+                        widgets.append(hidden_thinking_widget)
+                    self._item_widgets[id(item)] = hidden_thinking_widget
+                    continue
+                hidden_thinking_widget = None
+                widget = self._build_item_widget(item, theme=theme, state=state)
+                self._item_widgets[id(item)] = widget
+                widgets.append(widget)
+
+            if self._window_end < total:
+                self._bottom_boundary = TranscriptWindowBoundary("later", total - self._window_end)
+                widgets.append(self._bottom_boundary)
+            elif state.assistant_buffer:
+                self._active_assistant_widget = StreamingTranscriptMessageWidget(
+                    ChatItem(role="assistant", text=state.assistant_buffer),
+                    theme=theme,
+                )
+                self._active_message_widgets.append(self._active_assistant_widget)
+                widgets.append(self._active_assistant_widget)
+
+            if widgets:
+                self.mount(*widgets)
+            self._hidden_thinking_placeholder_visible = (
+                hidden_thinking_widget is not None and self._window_end == total
             )
-        ]
-        if removable:
-            self.remove_children(removable)
-        self._active_assistant_widget = None
-        self._active_thinking_widget = None
-        self._active_message_widgets = []
-        self._hidden_thinking_placeholder_visible = False
-        self._item_widgets.clear()
-        self._top_boundary = None
-        self._bottom_boundary = None
-
-        widgets: list[Widget] = []
-        if self._window_start > 0:
-            self._top_boundary = TranscriptWindowBoundary("earlier", self._window_start)
-            widgets.append(self._top_boundary)
-
-        hidden_thinking_widget: TranscriptMessageWidget | None = None
-        for item in state.items[self._window_start : self._window_end]:
-            if item.role == "thinking" and not state.show_thinking:
-                if hidden_thinking_widget is None:
-                    hidden_thinking_widget = TranscriptMessageWidget(
-                        _HIDDEN_THINKING_PLACEHOLDER_ITEM,
-                        theme=theme,
-                        show_tool_results=state.show_tool_results,
-                    )
-                    widgets.append(hidden_thinking_widget)
-                self._item_widgets[id(item)] = hidden_thinking_widget
-                continue
-            hidden_thinking_widget = None
-            expanded = state.show_tool_results or item.always_show_tool_result
-            widget = TranscriptMessageWidget(
-                item,
-                theme=theme,
-                show_tool_results=expanded,
-                custom_markup=(
-                    state.resolve_custom_markup(item, expanded=state.show_tool_results)
-                    if item.role == "custom"
-                    else None
-                ),
-                invocation=state.resolve_tool_invocation(item, expanded=expanded),
-                result_markup=state.resolve_tool_result(item, expanded=expanded),
-            )
-            self._item_widgets[id(item)] = widget
-            widgets.append(widget)
-
-        if self._window_end < total:
-            self._bottom_boundary = TranscriptWindowBoundary("later", total - self._window_end)
-            widgets.append(self._bottom_boundary)
-        elif state.assistant_buffer:
-            self._active_assistant_widget = StreamingTranscriptMessageWidget(
-                ChatItem(role="assistant", text=state.assistant_buffer),
-                theme=theme,
-            )
-            self._active_message_widgets.append(self._active_assistant_widget)
-            widgets.append(self._active_assistant_widget)
-
-        if widgets:
-            self.mount(*widgets)
-        self._hidden_thinking_placeholder_visible = (
-            hidden_thinking_widget is not None and self._window_end == total
-        )
-        self.refresh(layout=True)
+            self.refresh(layout=True)
         if scroll_end:
             self._request_follow_scroll()
+
+    def _clamp_window_bounds(self, total: int) -> None:
+        """Clamp the preserved window bounds to the valid range for ``total`` items."""
+        self._window_start = min(self._window_start, total)
+        self._window_end = min(max(self._window_end, self._window_start), total)
+        if self._window_end - self._window_start > TRANSCRIPT_WINDOW_ITEMS:
+            self._window_start = self._window_end - TRANSCRIPT_WINDOW_ITEMS
+
+    def _diff_redraw(self, *, scroll_end: bool) -> None:
+        """Reconcile the mounted rows with the current window of the same state.
+
+        Runs instead of the full rebuild when the state object, the retained row
+        projection, and the theme are unchanged. Rows whose stored fingerprint
+        still matches the item's current render inputs keep their widget object;
+        mismatched rows are replaced, and unmatched mounted rows are removed
+        only after the replacement rows are mounted.
+        """
+        state = self._render_state
+        if state is None:
+            return
+        theme = self._render_theme
+        total = len(state.items)
+        if scroll_end:
+            self._window_end = total
+            self._window_start = max(0, total - TRANSCRIPT_WINDOW_ITEMS)
+        else:
+            self._clamp_window_bounds(total)
+        entries = self._build_desired_entries(state, theme)
+        assistant_desired = self._window_end >= total and bool(state.assistant_buffer)
+        removed = self._prune_stale_rows(entries, assistant_desired=assistant_desired)
+        mounted: list[Widget] = []
+        self._mount_assistant_block(state, theme, desired=assistant_desired, mounted=mounted)
+        end_anchor = self._active_assistant_widget
+        if end_anchor is None:
+            end_anchor = self._bottom_boundary
+        self._merge_item_rows(
+            entries,
+            end_anchor=end_anchor,
+            theme=theme,
+            state=state,
+            mounted=mounted,
+            removed=removed,
+        )
+        top, top_counts_changed = self._reconcile_window_boundary(
+            self._top_boundary,
+            direction="earlier",
+            desired=self._window_start > 0,
+            count=self._window_start,
+            mounted=mounted,
+            removed=removed,
+        )
+        self._top_boundary = top
+        bottom, bottom_counts_changed = self._reconcile_window_boundary(
+            self._bottom_boundary,
+            direction="later",
+            desired=self._window_end < total,
+            count=total - self._window_end,
+            mounted=mounted,
+            removed=removed,
+        )
+        self._bottom_boundary = bottom
+        self._forget_removed_widgets(removed)
+        self._hidden_thinking_placeholder_visible = (
+            bool(entries) and bool(entries[-1].run_items) and self._window_end == total
+        )
+        if mounted or removed or top_counts_changed or bottom_counts_changed:
+            self.refresh(layout=True)
+        if scroll_end:
+            self._request_follow_scroll()
+
+    def _build_desired_entries(self, state: TuiState, theme: TuiTheme) -> list[_DesiredRow]:
+        """Build the desired window rows, collapsing hidden thinking runs into one entry."""
+        entries: list[_DesiredRow] = []
+        hidden_run: list[ChatItem] = []
+        for item in state.items[self._window_start : self._window_end]:
+            if item.role == "thinking" and not state.show_thinking:
+                hidden_run.append(item)
+                continue
+            if hidden_run:
+                entries.append(self._placeholder_entry(hidden_run, theme=theme, state=state))
+                hidden_run = []
+            entries.append(
+                _DesiredRow(
+                    item=item,
+                    widget=self._acquire_item_row(item, theme=theme, state=state),
+                )
+            )
+        if hidden_run:
+            entries.append(self._placeholder_entry(hidden_run, theme=theme, state=state))
+        return entries
+
+    def _placeholder_entry(
+        self, run: list[ChatItem], *, theme: TuiTheme, state: TuiState
+    ) -> _DesiredRow:
+        """Acquire the shared placeholder row for one run of hidden thinking items."""
+        fingerprint = _message_render_fingerprint(
+            _HIDDEN_THINKING_PLACEHOLDER_ITEM,
+            theme=theme,
+            show_tool_results=state.show_tool_results,
+        )
+        widget = self._item_widgets.get(id(run[0]))
+        if widget is None or widget.parent is not self or widget.render_fingerprint != fingerprint:
+            widget = self._build_placeholder_widget(
+                theme=theme,
+                show_tool_results=state.show_tool_results,
+            )
+        return _DesiredRow(
+            item=_HIDDEN_THINKING_PLACEHOLDER_ITEM,
+            widget=widget,
+            run_items=tuple(run),
+        )
+
+    def _acquire_item_row(
+        self, item: ChatItem, *, theme: TuiTheme, state: TuiState
+    ) -> TranscriptMessageWidget | StreamingTranscriptMessageWidget:
+        """Reuse the item's mounted row on a fingerprint match; otherwise construct one."""
+        mounted = self._item_widgets.get(id(item))
+        if mounted is not None and mounted.parent is self:
+            fingerprint = self._item_fingerprint(item, theme=theme, state=state, mounted=mounted)
+            if mounted.render_fingerprint == fingerprint:
+                return mounted
+        return self._build_item_widget(item, theme=theme, state=state)
+
+    def _item_fingerprint(
+        self,
+        item: ChatItem,
+        *,
+        theme: TuiTheme,
+        state: TuiState,
+        mounted: TranscriptMessageWidget | StreamingTranscriptMessageWidget,
+    ) -> tuple[object, ...]:
+        """Return the item's current fingerprint in the mounted row's formula.
+
+        A streaming block compares against the streaming formula so a finalized
+        block keeps its widget; every other row compares against the message
+        formula. Comparing a fingerprint across the two formulas never matches,
+        which remounts the row instead of reusing it for the wrong row kind.
+        """
+        if isinstance(mounted, StreamingTranscriptMessageWidget):
+            return (theme.name, item.role, item.text)
+        show_tool_results, custom_markup, invocation, result_markup = self._resolved_render_inputs(
+            item, state=state
+        )
+        return _message_render_fingerprint(
+            item,
+            theme=theme,
+            show_tool_results=show_tool_results,
+            custom_markup=custom_markup,
+            invocation=invocation,
+            result_markup=result_markup,
+        )
+
+    def _resolved_render_inputs(
+        self, item: ChatItem, *, state: TuiState
+    ) -> tuple[bool, str | None, str | None, str | None]:
+        """Resolve the construction inputs a full rebuild passes for one item."""
+        expanded = state.show_tool_results or item.always_show_tool_result
+        custom_markup = (
+            state.resolve_custom_markup(item, expanded=state.show_tool_results)
+            if item.role == "custom"
+            else None
+        )
+        return (
+            expanded,
+            custom_markup,
+            state.resolve_tool_invocation(item, expanded=expanded),
+            state.resolve_tool_result(item, expanded=expanded),
+        )
+
+    def _build_item_widget(
+        self, item: ChatItem, *, theme: TuiTheme, state: TuiState
+    ) -> TranscriptMessageWidget:
+        """Construct the message row for one window item exactly as a full rebuild does."""
+        show_tool_results, custom_markup, invocation, result_markup = self._resolved_render_inputs(
+            item, state=state
+        )
+        return TranscriptMessageWidget(
+            item,
+            theme=theme,
+            show_tool_results=show_tool_results,
+            custom_markup=custom_markup,
+            invocation=invocation,
+            result_markup=result_markup,
+        )
+
+    def _build_placeholder_widget(
+        self, *, theme: TuiTheme, show_tool_results: bool
+    ) -> TranscriptMessageWidget:
+        """Construct the hidden-thinking placeholder row exactly as a full rebuild does."""
+        return TranscriptMessageWidget(
+            _HIDDEN_THINKING_PLACEHOLDER_ITEM,
+            theme=theme,
+            show_tool_results=show_tool_results,
+        )
+
+    def _prune_stale_rows(
+        self, entries: list[_DesiredRow], *, assistant_desired: bool
+    ) -> list[Widget]:
+        """Remove the retry notice and every streaming block the diff render drops.
+
+        A mounted streaming block survives only when the desired sequence
+        resolves it by identity: as a desired entry's acquired row (a finalized
+        block) or as the active assistant block with a desired entry. Live
+        thinking blocks and a stale assistant block are removed here so the
+        merge never has to match them.
+        """
+        notice = self._retry_notice_widget
+        self._retry_notice_widget = None
+        removed: list[Widget] = []
+        if notice is not None and notice.parent is self:
+            removed.append(notice)
+        resolved_rows = [entry.widget for entry in entries]
+        if assistant_desired and self._active_assistant_widget is not None:
+            resolved_rows.append(self._active_assistant_widget)
+        for child in self.children:
+            if not isinstance(child, StreamingTranscriptMessageWidget):
+                continue
+            if any(child is row for row in resolved_rows):
+                continue
+            removed.append(child)
+        if removed:
+            self.remove_children(removed)
+        for widget in removed:
+            if widget is self._active_assistant_widget:
+                self._active_assistant_widget = None
+            if widget is self._active_thinking_widget:
+                self._active_thinking_widget = None
+        if removed:
+            self._active_message_widgets = [
+                widget
+                for widget in self._active_message_widgets
+                if not any(widget is removed_widget for removed_widget in removed)
+            ]
+        return removed
+
+    def _mount_assistant_block(
+        self,
+        state: TuiState,
+        theme: TuiTheme,
+        *,
+        desired: bool,
+        mounted: list[Widget],
+    ) -> None:
+        """Keep the active assistant block untouched, or construct it from the buffer."""
+        if not desired:
+            return
+        block = self._active_assistant_widget
+        if block is not None and block.parent is self:
+            return
+        block = StreamingTranscriptMessageWidget(
+            ChatItem(role="assistant", text=state.assistant_buffer),
+            theme=theme,
+        )
+        self.mount(block, before=self._bottom_boundary)
+        self._active_assistant_widget = block
+        self._active_message_widgets.append(block)
+        mounted.append(block)
+
+    def _mounted_item_rows(
+        self,
+    ) -> list[TranscriptMessageWidget | StreamingTranscriptMessageWidget]:
+        """Return the mounted message rows the merge reconciles, in DOM order.
+
+        Rows pruned on this pass or an earlier one stay in ``children`` until
+        Textual finishes removing them, so the prune flag filters them out.
+        Boundaries and the active assistant block are not message rows of the
+        merge; the assistant block is end-anchored and excluded by identity.
+        """
+        active_block = self._active_assistant_widget
+        return [
+            child
+            for child in self.children
+            if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
+            and child is not active_block
+            and not child._pruning
+        ]
+
+    def _merge_item_rows(
+        self,
+        entries: list[_DesiredRow],
+        *,
+        end_anchor: Widget | None,
+        theme: TuiTheme,
+        state: TuiState,
+        mounted: list[Widget],
+        removed: list[Widget],
+    ) -> None:
+        """Reuse, replace, or remount item rows so the DOM matches the desired entries.
+
+        The walk advances one position in both lists per reused or replaced row,
+        so the first position whose display items differ starts the remounted
+        suffix. Replacement rows mount before the removals run, so no empty
+        frame appears.
+        """
+        mounted_rows = self._mounted_item_rows()
+        replaced: list[Widget] = []
+        position = 0
+        while position < len(entries) and position < len(mounted_rows):
+            entry = entries[position]
+            row = mounted_rows[position]
+            if self._row_is_reusable(entry, row):
+                self._register_entry(entry, row)
+            elif entry.item is row.item:
+                widget = self._entry_widget_to_mount(entry, theme=theme, state=state)
+                before = (
+                    mounted_rows[position + 1] if position + 1 < len(mounted_rows) else end_anchor
+                )
+                self.mount(widget, before=before)
+                mounted.append(widget)
+                replaced.append(row)
+                self._register_entry(entry, widget)
+            else:
+                break
+            position += 1
+        self._remount_row_suffix(
+            entries[position:],
+            mounted_rows[position:],
+            end_anchor=end_anchor,
+            theme=theme,
+            state=state,
+            mounted=mounted,
+            removed=removed,
+            replaced=replaced,
+        )
+
+    def _row_is_reusable(
+        self,
+        entry: _DesiredRow,
+        row: TranscriptMessageWidget | StreamingTranscriptMessageWidget,
+    ) -> bool:
+        """Return whether a desired entry keeps the mounted row at its position."""
+        if entry.widget is row:
+            return True
+        if isinstance(entry.widget, StreamingTranscriptMessageWidget) != isinstance(
+            row, StreamingTranscriptMessageWidget
+        ):
+            return False
+        return entry.widget.render_fingerprint == row.render_fingerprint
+
+    def _entry_widget_to_mount(
+        self, entry: _DesiredRow, *, theme: TuiTheme, state: TuiState
+    ) -> TranscriptMessageWidget | StreamingTranscriptMessageWidget:
+        """Return the widget to mount for an entry, rebuilding one still mounted."""
+        if entry.widget.parent is None:
+            return entry.widget
+        return self._construct_entry_widget(entry, theme=theme, state=state)
+
+    def _construct_entry_widget(
+        self, entry: _DesiredRow, *, theme: TuiTheme, state: TuiState
+    ) -> TranscriptMessageWidget | StreamingTranscriptMessageWidget:
+        """Construct a fresh row for a desired entry."""
+        if entry.run_items:
+            return self._build_placeholder_widget(
+                theme=theme,
+                show_tool_results=state.show_tool_results,
+            )
+        return self._build_item_widget(entry.item, theme=theme, state=state)
+
+    def _remount_row_suffix(
+        self,
+        suffix_entries: list[_DesiredRow],
+        suffix_rows: list[TranscriptMessageWidget | StreamingTranscriptMessageWidget],
+        *,
+        end_anchor: Widget | None,
+        theme: TuiTheme,
+        state: TuiState,
+        mounted: list[Widget],
+        removed: list[Widget],
+        replaced: list[Widget],
+    ) -> None:
+        """Mount fresh rows for the remaining entries, then drop the stale rows.
+
+        ``replaced`` holds the rows swapped for content-only changes during the
+        walk; together with the suffix rows they are removed in one pass after
+        every mount, so no empty frame appears.
+        """
+        replacements: list[tuple[_DesiredRow, Widget]] = []
+        to_mount: list[Widget] = []
+        for entry in suffix_entries:
+            widget = self._entry_widget_to_mount(entry, theme=theme, state=state)
+            to_mount.append(widget)
+            replacements.append((entry, widget))
+        if to_mount:
+            self.mount(*to_mount, before=end_anchor)
+            mounted.extend(to_mount)
+        if replaced or suffix_rows:
+            removed.extend(replaced)
+            removed.extend(suffix_rows)
+            self.remove_children([*replaced, *suffix_rows])
+        for entry, widget in replacements:
+            self._register_entry(entry, widget)
+
+    def _register_entry(self, entry: _DesiredRow, row: Widget) -> None:
+        """Map every display item the entry represents to its reconciled row."""
+        if entry.run_items:
+            for item in entry.run_items:
+                self._item_widgets[id(item)] = row
+            return
+        self._item_widgets[id(entry.item)] = row
+
+    def _reconcile_window_boundary(
+        self,
+        boundary: TranscriptWindowBoundary | None,
+        *,
+        direction: Literal["earlier", "later"],
+        desired: bool,
+        count: int,
+        mounted: list[Widget],
+        removed: list[Widget],
+    ) -> tuple[TranscriptWindowBoundary | None, bool]:
+        """Mount, update, or remove one window boundary.
+
+        Returns the settled boundary (``None`` when the direction is omitted)
+        and whether an in-place count update happened, which keeps the fast
+        path unavailable for that pass.
+        """
+        if not desired:
+            if boundary is not None and boundary.parent is self:
+                removed.append(boundary)
+                self.remove_children([boundary])
+            return None, False
+        if boundary is not None and boundary.parent is self:
+            if boundary.count == count:
+                return boundary, False
+            boundary.update_count(count)
+            return boundary, True
+        boundary = TranscriptWindowBoundary(direction, count)
+        if direction == "earlier":
+            self.mount(boundary, before=self.children[0] if self.children else None)
+        else:
+            self.mount(boundary)
+        mounted.append(boundary)
+        return boundary, False
+
+    def _forget_removed_widgets(self, removed: list[Widget]) -> None:
+        """Drop item bookkeeping whose row was removed by this pass."""
+        if not removed:
+            return
+        removed_ids = {id(widget) for widget in removed}
+        for item_id, widget in tuple(self._item_widgets.items()):
+            if id(widget) in removed_ids:
+                del self._item_widgets[item_id]
 
     async def append_item(
         self,
@@ -1240,6 +1734,30 @@ class TranscriptView(VerticalScroll):
                 invocation=state.resolve_tool_invocation(item, expanded=expanded),
                 result_markup=state.resolve_tool_result(item, expanded=expanded),
             )
+        self._sync_row_fingerprints_with_visibility(state)
+
+    def _sync_row_fingerprints_with_visibility(self, state: TuiState) -> None:
+        """Align every other mounted row's stored flag and fingerprint with the toggle.
+
+        The visibility flag is part of every message row's fingerprint formula,
+        but only tool, skill, branch-summary, and compaction-summary rows render
+        it. Rows outside that set keep their widget objects and their rendered
+        content, so their stored flag is refreshed to the value a full rebuild
+        would pass; without this the next diff redraw would remount them. The
+        stored fingerprint still catches a real content change: a custom row
+        whose resolved markup differs under the new flag keeps a mismatching
+        fingerprint and is remounted by the diff redraw.
+        """
+        for child in self.children:
+            if not isinstance(child, TranscriptMessageWidget):
+                continue
+            if child.item.role in {"tool", "skill", "branch_summary", "compaction_summary"}:
+                continue
+            expanded = state.show_tool_results or child.item.always_show_tool_result
+            if child._show_tool_results == expanded:
+                continue
+            child._show_tool_results = expanded
+            child.render_fingerprint = child._compute_render_fingerprint()
 
     async def update_item(
         self,
