@@ -133,6 +133,11 @@ prior state. No migration or recovery work exists.
   `test_fragments_across_flush_windows_produce_ordered_writes`
   (`tests/test_tui_streaming.py`) become relative to a monkeypatched flush
   interval, so the test keeps its meaning at any constant.
+- One more adjustment to an existing test: the wait in
+  `test_streaming_code_block_hides_horizontal_scrollbar_until_finalized`
+  (`tests/test_tui_app.py`) spans the replaced flush window, so the
+  streamed code block exists when the test queries it. The tested behavior
+  is unchanged; only the wait adapts to the `0.05` cadence.
 - New `scripts/bench_transcript.py` and
   `dev-notes/tui-transcript-redraw-perf.md`.
 - A one-line correction to the cadence sentence in
@@ -241,7 +246,7 @@ update.
 - Code: `src/tau_coding/tui/widgets.py` is the primary change.
   `src/tau_coding/tui/app.py` call sites stay unchanged.
 - Tests: new `tests/test_tui_transcript_diff.py`. The existing suites pass
-  unchanged except the one named test adjustment in Scope; they carry the
+  unchanged except the two named test adjustments in Scope; they carry the
   behavior-preserving proof.
 - New files: `scripts/bench_transcript.py` (new top-level `scripts/`
   directory, run with `uv run python scripts/bench_transcript.py`) and
@@ -269,9 +274,12 @@ update.
    staleness bound is the constant itself.
 5. The baseline suite has one timing-flaky test
    (`test_tui_app_shows_working_state_during_manual_compaction[asyncio]`
-   in `tests/test_tui_app.py`).
-   Treatment: none in this change. This change adds no timing-based
-   assertions.
+   in `tests/test_tui_app.py`). One more test in the same file
+   (`test_streaming_transcript_deltas_do_not_force_scroll_end_during_scrollback`)
+   failed once under full-suite load with the `0.05` cadence and passed in
+   isolation and on a re-run.
+   Treatment: the isolate-and-re-run caveat covers both. This change adds
+   no timing-based assertions.
 
 ## Assumptions
 

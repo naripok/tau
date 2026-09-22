@@ -555,8 +555,10 @@ every scenario this spec covers.
 
 - GIVEN the established transcript test suites
 - WHEN they run after this change
-- THEN they pass unchanged except the adjusted flush-window test, whose sleeps
-  follow the replaced flush constant
+- THEN they pass unchanged except the two adjusted tests: the flush-window
+  test, whose sleeps follow the replaced flush constant, and the streaming
+  code-block test, whose wait spans the replaced flush window so the code
+  block exists when the test queries it
 
 #### Requirement: Benchmark script records before and after
 
