@@ -860,10 +860,10 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
 class _DesiredRow(NamedTuple):
     """One desired window row of a diff render.
 
-    ``item`` is the display item the row renders: a state item, the shared
-    sentinel item for a hidden-thinking placeholder entry, or a synthetic
-    buffer-backed item for the assistant entry. ``run_items`` is non-empty
-    only for a placeholder entry, which represents every item of its run.
+    ``item`` is the display item the row renders: a state item, or the shared
+    sentinel item for a hidden-thinking placeholder entry. ``run_items`` is
+    non-empty only for a placeholder entry, which represents every item of
+    its run.
     """
 
     item: ChatItem
@@ -1651,6 +1651,9 @@ class TranscriptView(VerticalScroll):
         for item_id, widget in tuple(self._item_widgets.items()):
             if id(widget) in removed_ids:
                 del self._item_widgets[item_id]
+        self._active_message_widgets = [
+            widget for widget in self._active_message_widgets if widget not in removed
+        ]
 
     async def append_item(
         self,

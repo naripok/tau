@@ -919,7 +919,7 @@ async def test_boundary_removed_when_window_extends_to_latest(
         assert bottom_boundary in removed
         assert not any(
             isinstance(child, TranscriptWindowBoundary) and child.direction == "later"
-            for child in _message_rows(transcript)
+            for child in transcript.children
         )
 
 
@@ -1064,7 +1064,7 @@ async def test_no_bottom_marker_while_stream_shows() -> None:
         assert transcript._bottom_boundary is None
         assert not [
             child
-            for child in _message_rows(transcript)
+            for child in transcript.children
             if isinstance(child, TranscriptWindowBoundary) and child.direction == "later"
         ]
 
