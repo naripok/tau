@@ -251,8 +251,12 @@ update.
 - New files: `scripts/bench_transcript.py` (new top-level `scripts/`
   directory, run with `uv run python scripts/bench_transcript.py`) and
   `dev-notes/tui-transcript-redraw-perf.md`.
-- Dependencies: none added. The change uses the Textual public API only:
-  `App.batch_update()` and the `parser_factory` parameter of `Markdown`.
+- Dependencies: none added. The change uses the Textual public API for
+  `App.batch_update()` and the `parser_factory` parameter of `Markdown`. It
+  also reads one Textual-private attribute: `Widget._pruning` filters rows
+  whose removal is scheduled but not finished, which keeps back-to-back diff
+  passes from reconciling against already-removed rows. Textual 8.2.8 is
+  pinned in `uv.lock`; recheck this read on any Textual upgrade.
 - Data, security, privacy, operations: None.
 
 ## Risks

@@ -10,9 +10,9 @@
 
 **Standards:** Apply the shared code standards in every task: DRY, minimal implementation (YAGNI), low cyclomatic complexity, type safety, no unnecessary abstractions or fallbacks, no hacks or workarounds, informative docstrings, documentation of current state only, writing-unambiguous-text prose.
 
-**Feature spec:** `docs/design/2026-09-21-tui-transcript-render-perf-spec.md` (the behavioral contract; version 7, sha256 `7d0980e174785ee8de88ddf5ff61a941ad21924464c1e4645e7500955bb309bb`; 21 requirements, all ADDED)
+**Feature spec:** `docs/design/2026-09-21-tui-transcript-render-perf-spec.md` (the behavioral contract; version 8, sha256 `594e2725508fa429a3e844c7cbd30e96841b4f98389c16b12e74109d77c5ae82`; 21 requirements, all ADDED)
 
-**Approved proposal:** `docs/design/2026-09-21-tui-transcript-render-perf-proposal.md` (intent, scope, binding architecture, constraints, non-goals, acceptance, and risk treatment; version 8, sha256 `bf82d593e7c9c6900d6c02ffacda3d30bdb5879b8cec234e64c3179e5eeda63c`, operator-approved)
+**Approved proposal:** `docs/design/2026-09-21-tui-transcript-render-perf-proposal.md` (intent, scope, binding architecture, constraints, non-goals, acceptance, and risk treatment; version 9, sha256 `4542262b3fc6ccf819b94a3b51399818a5664e7cb99c39e16099998b46bf6e39`, operator-approved)
 
 **Workflow depth:** Standard. Execute with subagent-driven-development.
 

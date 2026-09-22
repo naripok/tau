@@ -79,8 +79,10 @@ block, and the notice row) SHALL record a render fingerprint at construction. A
 boundary marker records no render fingerprint; the boundary-marker requirement
 governs its reuse. A row SHALL recompute its fingerprint at exactly these
 points: construction, an
-in-place row update, the completion of streaming finalization, and the swap of
-the displayed item on a streamed block. The fingerprint SHALL cover these
+in-place row update, the completion of streaming finalization, the swap of
+the displayed item on a streamed block, and the synchronization pass of the
+tool-result visibility toggle, which rewrites the stored visibility flag and
+fingerprint of rows that keep their widgets. The fingerprint SHALL cover these
 render inputs:
 
 - the item content and role
