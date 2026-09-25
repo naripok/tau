@@ -39,7 +39,7 @@ from textual.widgets import (
     Static,
     TextArea,
 )
-from textual.worker import Worker
+from textual.worker import Worker, WorkerError
 
 from tau_agent.events import (
     AgentEndEvent,
@@ -3650,6 +3650,10 @@ class TauTuiApp(App[None]):
         self._compaction_worker: Worker[None] | None = None
         self._compacting = False
         self._compaction_run_id = 0
+        # Prompts submitted while a manual compaction is running. The harness is
+        # idle during compaction, so these wait in the TUI and digest as
+        # ordinary agent turns once the compaction worker exits.
+        self._compaction_pending_prompts: list[str] = []
         self._prompt_run_id = 0
         self._optimistic_user_messages: list[tuple[int, str]] = []
         self._completion_state = CompletionState()
@@ -3984,13 +3988,24 @@ class TauTuiApp(App[None]):
         if self._is_compaction_active():
             if text.startswith("/compact"):
                 self._notify("A compaction is already running.", severity="warning")
-            else:
+                return
+            if text.startswith("/") or parse_terminal_command(text) is not None:
                 prompt.text = raw_text
                 prompt.move_cursor(_text_end_location(raw_text))
                 self._notify(
                     "Compaction is still running. You can keep editing, but wait to submit.",
                     severity="warning",
                 )
+                return
+            prompt.text = ""
+            prompt._clear_pending_paste()
+            self._completion_state = CompletionState()
+            self._refresh_completions()
+            self._remember_prompt(text)
+            self._compaction_pending_prompts.append(text)
+            self.state.update_pending_prompts(tuple(self._compaction_pending_prompts))
+            self._refresh_chrome_if_mounted()
+            self._notify("Queued. It will be sent when compaction finishes.")
             return
 
         prompt.text = ""
@@ -4140,21 +4155,21 @@ class TauTuiApp(App[None]):
     def _is_agent_or_queue_active(self) -> bool:
         """Return whether compaction would race an active or queued agent turn."""
         self._sync_queue_state()
+        return self._is_prompt_turn_active() or self.state.queued_message_count > 0
+
+    def _is_prompt_turn_active(self) -> bool:
+        """Return whether an agent turn is running or about to start."""
         worker = self._prompt_worker
         is_worker_active = worker is not None and not worker.is_finished and not worker.is_cancelled
         is_session_running = bool(getattr(self.session, "is_running", False))
-        return (
-            self.state.running
-            or is_session_running
-            or is_worker_active
-            or self.state.queued_message_count > 0
-        )
+        return self.state.running or is_session_running or is_worker_active
 
     async def _run_compaction(self, summary: str) -> None:
         """Run manual compaction without disabling prompt editing."""
         self._compaction_run_id += 1
         run_id = self._compaction_run_id
         self._compacting = True
+        compaction_failed = False
         try:
             self.state.clear()
             self.state.add_item("status", "Compacting session…")
@@ -4164,7 +4179,9 @@ class TauTuiApp(App[None]):
             return
         except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
             self._notify(f"Error: {exc}", severity="error")
-            return
+            # The session context is unchanged, so prompts queued while the
+            # failed compaction ran can still be digested as normal turns.
+            compaction_failed = True
         finally:
             # A cancelled run can tear down after a newer compaction started, so only
             # clear working state this run still owns.
@@ -4172,6 +4189,10 @@ class TauTuiApp(App[None]):
                 self._compacting = False
                 self._compaction_worker = None
                 self._refresh_chrome_if_mounted()
+        if compaction_failed:
+            # Scheduled after the finally so the flush sees compaction as over.
+            self._schedule_pending_prompt_flush()
+            return
         self.state.clear()
         self.state.set_skills(self.session.skills)
         self._load_session_messages_from_session()
@@ -4179,6 +4200,55 @@ class TauTuiApp(App[None]):
         self._refresh()
         if not self._app_has_focus:
             self._terminal_notification.notify_turn_finished()
+        # Run outside this worker: submitting a prompt starts an exclusive
+        # default-group worker, which would cancel this compaction worker.
+        self._schedule_pending_prompt_flush()
+
+    def _schedule_pending_prompt_flush(self) -> None:
+        """Start digesting prompts queued during compaction, if the session is free."""
+        if not self._compaction_pending_prompts:
+            return
+        if self._is_prompt_turn_active() or self._is_compaction_active():
+            return
+        self.run_worker(
+            self._flush_pending_prompts(),
+            name="pending-prompt-flush",
+            group="pending-prompts",
+            exclusive=True,
+        )
+
+    async def _flush_pending_prompts(self) -> None:
+        """Submit prompts queued during compaction, in order, one agent turn at a time."""
+        while self._compaction_pending_prompts:
+            if self._is_prompt_turn_active() or self._is_compaction_active():
+                # A newer turn or compaction took over; its settle path reschedules
+                # this flush so the remaining prompts still digest.
+                return
+            text = self._compaction_pending_prompts.pop(0)
+            self.state.update_pending_prompts(tuple(self._compaction_pending_prompts))
+            self._refresh_chrome_if_mounted()
+            await self._submit_prompt(text)
+            worker = self._prompt_worker
+            if worker is None or worker.is_finished or worker.is_cancelled:
+                continue
+            try:
+                await worker.wait()
+            except WorkerError:
+                # The turn failed or was interrupted; stop digesting the queue.
+                return
+
+    def _discard_pending_prompts(self, *, notify: bool) -> None:
+        """Drop prompts queued during compaction without submitting them."""
+        dropped = len(self._compaction_pending_prompts)
+        if not dropped:
+            return
+        self._compaction_pending_prompts.clear()
+        self.state.update_pending_prompts(())
+        self._refresh_chrome_if_mounted()
+        if notify:
+            self._notify(
+                f"Discarded {dropped} prompt{'s' if dropped != 1 else ''} queued during compaction."
+            )
 
     async def _submit_prompt(
         self,
@@ -4950,6 +5020,10 @@ class TauTuiApp(App[None]):
             self._clear_optimistic_user_messages(run_id=active_run_id)
             if active_run_id == self._prompt_run_id:
                 self._prompt_worker = None
+                # Recovery path: if prompts queued during compaction are still
+                # waiting (for example a manual submission raced this turn),
+                # resume digesting them once the session settles.
+                self._schedule_pending_prompt_flush()
 
     async def _apply_streaming_transcript_event(self, event: CodingSessionEvent) -> None:
         """Apply an agent event to mounted transcript widgets without full redraws."""
@@ -5117,6 +5191,7 @@ class TauTuiApp(App[None]):
         self._compaction_run_id += 1
         self._compaction_worker = None
         self._compacting = False
+        self._discard_pending_prompts(notify=notify)
         self.state.clear()
         self.state.set_skills(self.session.skills)
         self._load_session_messages_from_session()
@@ -5143,6 +5218,7 @@ class TauTuiApp(App[None]):
         self._prompt_worker = None
         self.state.running = False
         self.state.assistant_buffer = ""
+        self._discard_pending_prompts(notify=notify)
         self._sync_text_selection_state()
         self._refresh()
         if notify:
@@ -5443,6 +5519,7 @@ class TauTuiApp(App[None]):
         self.run_worker(self._resume_session(session_id), exclusive=False)
 
     async def _resume_session(self, session_id: str) -> None:
+        self._discard_pending_prompts(notify=False)
         try:
             resume_message = await self.session.resume(session_id)
             self._reload_session_themes()
@@ -5532,6 +5609,7 @@ class TauTuiApp(App[None]):
 
     async def _new_session(self) -> None:
         self._cancel_active_prompt(notify=False, interrupt=True)
+        self._discard_pending_prompts(notify=False)
         new_session = getattr(self.session, "new_session", None)
         if new_session is None:
             self._notify("Session manager is not available.")
@@ -6029,6 +6107,7 @@ class TauTuiApp(App[None]):
         queue_render_key = (
             self.state.queued_steering,
             self.state.queued_follow_up,
+            self.state.pending_prompts,
             theme.name,
             theme.muted_text,
         )
@@ -6901,6 +6980,10 @@ def _render_queued_messages(state: TuiState, *, theme: TuiTheme) -> Group:
         rows.append(row)
     for message in state.queued_follow_up:
         row = Text("↳ follow-up · queued: ", style=theme.muted_text)
+        row.append(_queued_message_preview(message), style=theme.prompt_text)
+        rows.append(row)
+    for message in state.pending_prompts:
+        row = Text("⧗ queued during compaction: ", style=theme.muted_text)
         row.append(_queued_message_preview(message), style=theme.prompt_text)
         rows.append(row)
     return Group(*rows)

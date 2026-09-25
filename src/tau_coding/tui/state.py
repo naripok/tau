@@ -93,6 +93,10 @@ class TuiState:
     show_thinking: bool = False
     queued_steering: tuple[str, ...] = ()
     queued_follow_up: tuple[str, ...] = ()
+    # Prompts submitted while a manual compaction was running. They wait in the
+    # TUI (not the agent harness, which is idle during compaction) until the
+    # compaction worker finishes, then digest as ordinary agent turns.
+    pending_prompts: tuple[str, ...] = ()
     skills: tuple[Skill, ...] = ()
     custom_renderer: CustomMessageMarkup | None = None
     tool_call_renderer: ToolCallMarkup | None = None
@@ -613,10 +617,14 @@ class TuiState:
         self.queued_steering = steering
         self.queued_follow_up = follow_up
 
+    def update_pending_prompts(self, prompts: tuple[str, ...]) -> None:
+        """Replace the visible list of prompts queued during compaction."""
+        self.pending_prompts = prompts
+
     @property
     def queued_message_count(self) -> int:
         """Return the total number of pending queued messages."""
-        return len(self.queued_steering) + len(self.queued_follow_up)
+        return len(self.queued_steering) + len(self.queued_follow_up) + len(self.pending_prompts)
 
     def clear(self) -> None:
         """Clear visible transcript state without modifying durable session history."""

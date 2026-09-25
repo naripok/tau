@@ -1,6 +1,6 @@
 import asyncio
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
@@ -16,6 +16,7 @@ from textual.containers import Container, VerticalScroll
 from textual.content import Content
 from textual.content import Style as TextualStyle
 from textual.geometry import Offset
+from textual.pilot import Pilot
 from textual.selection import SELECT_ALL, Selection
 from textual.widgets import Collapsible, Input, Label, ListItem, ListView, Static, TextArea
 from textual.widgets import Markdown as TextualMarkdown
@@ -4619,6 +4620,272 @@ async def test_tui_app_blocks_compact_command_while_follow_up_is_queued() -> Non
 
     async with app.run_test() as pilot:
         app._refresh()
+        prompt = app.query_one("#prompt")
+        prompt.value = "/compact Summary of earlier work."
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert session.compact_summaries == []
+        assert prompt.value == "/compact Summary of earlier work."
+        assert notifications == [
+            "Wait for the current agent turn and queued messages to finish before compacting."
+        ]
+
+
+@pytest.mark.anyio
+async def test_tui_app_queues_prompt_while_compacting() -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    turn_started = asyncio.Event()
+
+    class SlowCompactSession(FakeSession):
+        async def compact(self, summary: str) -> str:
+            self.compact_summaries.append(summary)
+            started.set()
+            await finish.wait()
+            self.messages = (
+                UserMessage(content="Previous conversation summary:\nGenerated summary"),
+            )
+            self.context_token_estimate = 42
+            return "Compacted 2 context entries."
+
+        async def prompt(self, text: str, **kwargs: object) -> AsyncIterator[object]:
+            turn_started.set()
+            async for event in super().prompt(text, **kwargs):
+                yield event
+
+    session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
+    app = TauTuiApp(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/compact Summary of earlier work."
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        prompt.value = "What did we decide about the API?"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # The prompt is queued while compaction runs, not submitted.
+        assert session.prompt_texts == []
+        assert prompt.value == ""
+        assert app._compaction_pending_prompts == ["What did we decide about the API?"]
+        assert app.state.pending_prompts == ("What did we decide about the API?",)
+        queued_messages = app.query_one("#queued-messages")
+        assert queued_messages.display is True
+        rendered_queue = tui_app._render_queued_messages(
+            app.state,
+            theme=app.tui_settings.resolved_theme,
+        )
+        rendered_rows = [str(row) for row in rendered_queue.renderables]
+        assert "⧗ queued during compaction: What did we decide about the API?" in rendered_rows
+        assert notifications == ["Queued. It will be sent when compaction finishes."]
+
+        finish.set()
+        await asyncio.wait_for(turn_started.wait(), timeout=1)
+        await _wait_until(lambda: not app._compaction_pending_prompts, pilot)
+
+        # Once compaction finishes, the queued prompt digests as a normal turn.
+        assert session.prompt_texts == ["What did we decide about the API?"]
+        assert session.streaming_behaviors == [None]
+        assert app._compaction_pending_prompts == []
+        assert app.state.pending_prompts == ()
+        assert queued_messages.display is False
+        assert notifications == [
+            "Queued. It will be sent when compaction finishes.",
+            "Compacted 2 context entries.",
+        ]
+
+
+@pytest.mark.anyio
+async def test_tui_app_flushes_multiple_queued_prompts_in_order() -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    class SlowCompactSession(FakeSession):
+        async def compact(self, summary: str) -> str:
+            self.compact_summaries.append(summary)
+            started.set()
+            await finish.wait()
+            self.messages = (
+                UserMessage(content="Previous conversation summary:\nGenerated summary"),
+            )
+            self.context_token_estimate = 42
+            return "Compacted 2 context entries."
+
+    session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/compact Summary of earlier work."
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        prompt.value = "first queued"
+        await pilot.press("enter")
+        await pilot.pause()
+        prompt.value = "second queued"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert session.prompt_texts == []
+        assert app._compaction_pending_prompts == ["first queued", "second queued"]
+
+        finish.set()
+        await _wait_until(lambda: not app._compaction_pending_prompts, pilot)
+
+        assert session.prompt_texts == ["first queued", "second queued"]
+        assert app._compaction_pending_prompts == []
+        assert app.state.pending_prompts == ()
+
+
+async def _wait_until(
+    predicate: Callable[[], bool],
+    pilot: Pilot,
+    *,
+    timeout: float = 2.0,
+) -> None:
+    """Pump the TUI until ``predicate`` holds, failing after ``timeout`` seconds."""
+    for _ in range(200):
+        if predicate():
+            await pilot.pause()
+            return
+        await pilot.pause()
+    raise AssertionError("Timed out waiting for TUI condition")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("blocked_input", ["/new", "!ls"])
+async def test_tui_app_blocks_commands_and_terminal_commands_while_compacting(
+    blocked_input: str,
+) -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    class SlowCompactSession(FakeSession):
+        async def compact(self, summary: str) -> str:
+            self.compact_summaries.append(summary)
+            started.set()
+            await finish.wait()
+            self.messages = (
+                UserMessage(content="Previous conversation summary:\nGenerated summary"),
+            )
+            self.context_token_estimate = 42
+            return "Compacted 2 context entries."
+
+    session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
+    app = TauTuiApp(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/compact Summary of earlier work."
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        prompt.value = blocked_input
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert session.new_session_count == 0
+        assert session.terminal_commands == []
+        assert app._compaction_pending_prompts == []
+        assert prompt.value == blocked_input
+        assert notifications == [
+            "Compaction is still running. You can keep editing, but wait to submit."
+        ]
+
+        finish.set()
+        await pilot.pause()
+
+        assert blocked_input not in session.prompt_texts
+
+
+@pytest.mark.anyio
+async def test_tui_app_discards_queued_prompts_when_compaction_cancelled() -> None:
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    class SlowCompactSession(FakeSession):
+        async def compact(self, summary: str) -> str:
+            self.compact_summaries.append(summary)
+            started.set()
+            await finish.wait()
+            self.messages = (
+                UserMessage(content="Previous conversation summary:\nGenerated summary"),
+            )
+            self.context_token_estimate = 42
+            return "Compacted 2 context entries."
+
+    session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
+    app = TauTuiApp(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/compact Summary of earlier work."
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        prompt.value = "queued before cancel"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app._compaction_pending_prompts == ["queued before cancel"]
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert app._compaction_pending_prompts == []
+        assert app.state.pending_prompts == ()
+        assert notifications == [
+            "Queued. It will be sent when compaction finishes.",
+            "Discarded 1 prompt queued during compaction.",
+            "Cancelled compaction.",
+        ]
+
+        finish.set()
+        await pilot.pause()
+
+        assert session.prompt_texts == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_queued_prompts_block_new_compaction_until_digested() -> None:
+    """A pending flush counts as queued work, so /compact waits for it."""
+    session = FakeSession()
+    app = TauTuiApp(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        app._compaction_pending_prompts.append("not digested yet")
+        app.state.update_pending_prompts(("not digested yet",))
         prompt = app.query_one("#prompt")
         prompt.value = "/compact Summary of earlier work."
         await pilot.press("enter")
